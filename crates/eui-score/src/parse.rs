@@ -48,6 +48,11 @@ pub const SCRIPTS: [&str; 20] = [
 /// a variable used in a variable used in a variable multiplies.
 const MAX_TOKENS: usize = 400_000;
 
+/// The most characters the variables may write out in their tokens' words:
+/// a long string in a variable used in a variable used in a variable
+/// multiplies as its tokens do, and is copied before anything counts it.
+const MAX_TOKEN_TEXT: usize = 4_000_000;
+
 /// Where `\afterGrace`'s grace notes start, as a part of their note:
 /// LilyPond's `afterGraceFraction`.
 pub const AFTER_GRACE: f64 = 0.75;
@@ -553,6 +558,7 @@ fn syllables(items: &[LyricItem], at: usize) -> Result<Vec<Syllable>, ScoreError
     if out.is_empty() {
         return refuse("\\addlyrics with no words in it", at);
     }
+    crate::written::spend(crate::written::Written { events: out.len(), text: out.iter().map(|y| crate::written::chars(&y.text)).sum() }, at)?;
     Ok(out)
 }
 
@@ -1450,6 +1456,8 @@ pub struct Parsed {
     pub warnings: Vec<Warning>,
     /// `\override Score.SpacingSpanner …`: how durations are spaced.
     pub spacing: SpacingSpanner,
+    /// What the music writes out: what layout has to draw (score #540).
+    pub written: crate::written::Written,
 }
 
 /// The page a source asks for: `\paper { #(set-paper-size "letter")
@@ -1657,8 +1665,9 @@ struct Base {
     notes: usize,
     lang: Lang,
     pending: Vec<Pending>,
-    /// `\addQuote "name" { … }`: a part's music that a cue quotes, by name.
-    quotes: HashMap<String, Vec<Ev>>,
+    /// `\addQuote "name" { … }`: a part's music that a cue quotes, by name;
+    /// shared with each staff read after it, not copied into each.
+    quotes: std::rc::Rc<HashMap<String, Vec<Ev>>>,
     /// Inside `\compressMMRests` around staves: each staff read gathers its
     /// runs of bars' rest.
     compress: usize,
@@ -1736,6 +1745,9 @@ struct St {
     scale: (i64, i64),
     /// The first ossia's `\with`: the ossia staff's settings.
     ossia_props: Option<Props>,
+    /// A bar's length in ticks under the `\time` read last: what a long
+    /// rest's bars are counted in.
+    bar: i64,
 }
 
 #[derive(Clone, Copy)]
@@ -1773,6 +1785,7 @@ fn at_of(toks: &[Tok], i: usize) -> usize {
 fn expand(toks: Vec<Tok>) -> Result<Vec<Tok>, ScoreError> {
     let mut defs: HashMap<String, Vec<Tok>> = HashMap::new();
     let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
+    let mut text = 0usize;
     let mut depth = 0i64;
     let mut i = 0;
     while i < toks.len() {
@@ -1781,7 +1794,7 @@ fn expand(toks: Vec<Tok>) -> Result<Vec<Tok>, ScoreError> {
             beyond();
             let end = expr_end(&toks, i + 2)?;
             let mut value = Vec::with_capacity(end - i - 2);
-            put(&toks[i + 2..end], &defs, &mut value)?;
+            put(&toks[i + 2..end], &defs, &mut value, &mut text)?;
             defs.insert(t.v.clone(), value);
             i = end;
             continue;
@@ -1791,7 +1804,7 @@ fn expand(toks: Vec<Tok>) -> Result<Vec<Tok>, ScoreError> {
             T::Sym('}') => depth -= 1,
             _ => {}
         }
-        put(std::slice::from_ref(t), &defs, &mut out)?;
+        put(std::slice::from_ref(t), &defs, &mut out, &mut text)?;
         i += 1;
     }
     Ok(out)
@@ -1807,11 +1820,20 @@ fn definition_blocked(toks: &[Tok], i: usize) -> bool {
     (before.t == T::Cmd && (before.v == "new" || before.v == "context")) || before.t == T::Sym('.')
 }
 
-/// `from` onto `out`, each use of a definition written out.
-fn put(from: &[Tok], defs: &HashMap<String, Vec<Tok>>, out: &mut Vec<Tok>) -> Result<(), ScoreError> {
+/// `from` onto `out`, each use of a definition written out; `text` the
+/// characters the uses have copied so far.
+fn put(from: &[Tok], defs: &HashMap<String, Vec<Tok>>, out: &mut Vec<Tok>, text: &mut usize) -> Result<(), ScoreError> {
     for t in from {
         match defs.get(&t.v).filter(|_| t.t == T::Cmd) {
-            Some(value) => out.extend(value.iter().cloned()),
+            Some(value) => {
+                // Counted before the copy is made.
+                let size: usize = value.iter().map(|k| k.v.len() + k.lyrics.iter().map(|l| l.s.len()).sum::<usize>()).sum();
+                *text = text.saturating_add(size);
+                if *text > MAX_TOKEN_TEXT || out.len().saturating_add(value.len()) > MAX_TOKENS {
+                    return refuse("the variables write out to more music than this engraves", t.at);
+                }
+                out.extend(value.iter().cloned());
+            }
             None => out.push(t.clone()),
         }
         if out.len() > MAX_TOKENS {
@@ -2208,9 +2230,11 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     WARNINGS.with(|w| w.borrow_mut().clear());
     SPACING.with(|sp| *sp.borrow_mut() = SpacingSpanner::default());
     crate::look::reset();
+    crate::written::reset();
     let toks = expand(tokens(src)?)?;
     scan_beyond(&toks);
-    let mut st = Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new(), quotes: HashMap::new(), compress: 0, local: None };
+    let mut st =
+        Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new(), quotes: std::rc::Rc::default(), compress: 0, local: None };
     // The file's scores, one after another: `\score { … }` blocks, music
     // written without one, inside `\book { }` and `\bookpart { }`.
     let mut movements: Vec<Movement> = Vec::new();
@@ -2295,11 +2319,16 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
             }
         }
     }
-    crate::look::settle(&mut staves, &groups);
+    let mut parsed = Parsed { header: st.header, paper: st.paper, staves, groups, warnings: Vec::new(), spacing: SpacingSpanner::default(), written: crate::written::Written::default() };
+    // What layout gets, counted whole: each staff as long as the longest.
+    parsed.written = crate::written::finished(&parsed);
+    parsed.written.within(parsed.staves.first().and_then(|s| s.events.first()).map_or(0, |e| e.at))?;
+    crate::look::settle(&mut parsed.staves, &parsed.groups);
     let mut warnings = WARNINGS.with(|w| std::mem::take(&mut *w.borrow_mut()));
     warnings.sort_by_key(|w| w.at);
-    let spacing = SPACING.with(|sp| *sp.borrow());
-    Ok(Parsed { header: st.header, paper: st.paper, staves, groups, warnings, spacing })
+    parsed.spacing = SPACING.with(|sp| *sp.borrow());
+    parsed.warnings = warnings;
+    Ok(parsed)
 }
 
 /// A score of the file, read: its staves and groups, its own header (a
@@ -2403,7 +2432,7 @@ fn preamble(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreErr
                 let mut read = Vec::new();
                 i = staff_named(toks, i + 2, st, &mut read, Props::default(), StaffKind::Notes, None)?;
                 (st.counter, st.notes) = (counter, notes);
-                st.quotes.insert(name, read.pop().map(|s| s.events).unwrap_or_default());
+                std::rc::Rc::make_mut(&mut st.quotes).insert(name, read.pop().map(|s| s.events).unwrap_or_default());
             }
             "include" => {
                 let Some(name) = toks.get(i + 1).filter(|n| n.t == T::Str) else { return refuse("\\include wants a file's name, in quotes", t.at) };
@@ -3224,7 +3253,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         cross: None,
         size: 0,
         cue: false,
-        quotes: std::rc::Rc::new(base.quotes.clone()),
+        quotes: std::rc::Rc::clone(&base.quotes),
         here: 0,
         ossias: Vec::new(),
         stem: 0,
@@ -3236,6 +3265,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         look: crate::look::LookState::default(),
         scale: (1, 1),
         ossia_props: None,
+        bar: WHOLE,
     };
     if base.compress > 0 {
         st.events.push(Ev { k: Kind::Compress, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() });
@@ -3272,6 +3302,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
             };
         }
     }
+    crate::written::spend_events(1, toks.get(i.saturating_sub(1)).map_or(0, |t| t.at))?;
     staves.push(Staff { kind, events: st.events, props: st.props, lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: st.voice_names, name });
     Ok(i)
 }
@@ -3713,6 +3744,9 @@ fn cue_during(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, Stri
         cue.push(Ev { k: Kind::Rest, spacer: true, ticks: to - held, base: 4, at, i: st.items, ..Ev::default() });
         st.items += 1;
     }
+    // The quote's notes copied once more, and the bars of rest counted one by one.
+    let copied = crate::written::cost(&cue, st.bar);
+    crate::written::spend(crate::written::Written { events: copied.events.saturating_add(music.len()), text: copied.text }, at)?;
     let (first, second_voice) = if up { (cue, music) } else { (music, cue) };
     st.events.push(Ev { k: Kind::Voices, at, ..Ev::default() });
     for (v, events) in [(1u8, first), (2u8, second_voice)] {
@@ -4125,6 +4159,7 @@ fn postfix(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
     }
     let nxt = toks[i + 1].clone();
     if nxt.t == T::Str {
+        crate::written::spend_text(crate::written::chars(&nxt.v), nxt.at)?;
         let last = last_item(&mut st.events, &tk)?;
         // Written with `-`: the side is settled with the layout settings (`look::settle`).
         last.texts.push(Words::plain(nxt.v, dir));
@@ -4306,6 +4341,7 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
                     *slot = u8::try_from(*p).unwrap_or(0);
                 }
             }
+            st.bar = crate::written::bar_ticks(num, den);
             st.events.push(Ev { k: Kind::Time, time: (num, den), time_parts, at: tk.at, ..Ev::default() });
             return Ok(j + 1);
         }
@@ -5055,6 +5091,7 @@ fn unfold(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>,
     let tk = toks[i].clone();
     let before = st.events.len();
     let (items0, notes0, tuplets0) = (st.items, st.notes, st.tuplets);
+    let bar0 = st.bar;
     let mut j = expr(toks, i + 3, st, hd)?;
     let body: Vec<Ev> = st.events.split_off(before);
     let mut endings: Vec<Vec<Ev>> = Vec::new();
@@ -5095,13 +5132,27 @@ fn unfold(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>,
         }
         j = k + 1;
     }
+    // The ending each time plays: the one numbered for it, else in turn,
+    // the first standing for the times the endings do not number.
+    let ending_of = |time: i64| -> Option<usize> {
+        if endings.is_empty() {
+            return None;
+        }
+        let named = passes.iter().position(|p| p.contains(&(time + 1)));
+        Some(named.unwrap_or((time - (count - endings.len() as i64)).max(0) as usize))
+    };
+    // The copies counted before they are made: a repeat in a repeat in a
+    // repeat stops here, its music never written out.
+    let body_cost = crate::written::cost(&body, bar0);
+    let ending_costs: Vec<_> = endings.iter().map(|e| crate::written::cost(e, st.bar)).collect();
+    let copies = crate::written::unfolded(&body_cost, &ending_costs, usize::try_from(count).unwrap_or(0), |t| ending_of(t as i64));
+    crate::written::spend(copies, tk.at)?;
     let mut out: Vec<Ev> = Vec::new();
     let mut tuplet_map: HashMap<i64, i64> = HashMap::new();
     let mut fresh = tuplets0;
     for time in 0..count {
         tuplet_map.clear();
-        let named = passes.iter().position(|p| p.contains(&(time + 1)));
-        let ending = if endings.is_empty() { None } else { endings.get(named.unwrap_or((time - (count - endings.len() as i64)).max(0) as usize)) };
+        let ending = ending_of(time).and_then(|k| endings.get(k));
         let copy = percent && time > 0;
         if copy {
             st.percents += 1;
@@ -5327,6 +5378,7 @@ fn tempo(toks: &[Tok], i: usize, st: &mut St) -> Result<usize, ScoreError> {
     let mut mark = Tempo::default();
     if is(toks, j, T::Str) {
         mark.text = toks[j].v.clone();
+        crate::written::spend_text(crate::written::chars(&mark.text), toks[j].at)?;
         j += 1;
     }
     if is(toks, j, T::Num) {
@@ -5518,6 +5570,9 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         if count < 1 {
             return refuse("a count of bars is at least one", toks[i].at);
         }
+        // `R1*1000000`: the bars it spans counted before anything is made of them.
+        let span = crate::written::note_weight(1, (WHOLE / st.base.max(1)).saturating_mul(count), st.bar);
+        crate::written::Written { events: span, text: 0 }.within(toks[i].at)?;
         i += 2;
     }
     let base = st.base;
@@ -5533,7 +5588,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     }
     // A spacer counted, `s1*16`: the time of all of them in one.
     if rest.as_deref() == Some("s") && count > 1 {
-        ticks *= count;
+        ticks = ticks.saturating_mul(count);
         count = 1;
     }
     let scripts = drum_scripts.iter().map(|n| Script { name: (*n).to_owned(), dir: -1 }).collect();
@@ -5618,6 +5673,9 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     ev.no_autobeam = st.no_autobeam;
     ev.cue = st.cue;
     ev.look = st.look.stamp();
+    let span = crate::written::note_weight(ev.pitches.len(), ev.ticks.saturating_mul(ev.count.max(1)), st.bar);
+    let weight = if ev.full { span.max(usize::try_from(ev.count).unwrap_or(usize::MAX)) } else { span };
+    crate::written::spend_events(weight, tk.at)?;
     st.events.push(ev);
     Ok(i)
 }
@@ -5719,7 +5777,10 @@ fn mark_label(toks: &[Tok], i: usize, st: &mut St) -> Result<(Vec<Run>, usize), 
             st.marks = n;
             Ok((bold(letters(n)), j + 1))
         }
-        Some(t) if t.t == T::Str => Ok((bold(t.v.clone()), j + 1)),
+        Some(t) if t.t == T::Str => {
+            crate::written::spend_text(crate::written::chars(&t.v), t.at)?;
+            Ok((bold(t.v.clone()), j + 1))
+        }
         Some(t) if t.t == T::Cmd && t.v == "markup" => markup(toks, j + 1, t.at),
         _ => refuse("\\mark wants \\default, a number, a string or \\markup", at),
     }
@@ -5748,6 +5809,7 @@ fn markup(toks: &[Tok], i: usize, at: usize) -> Result<(Vec<Run>, usize), ScoreE
     if runs.is_empty() {
         return refuse("a \\markup with nothing in it", at);
     }
+    crate::written::spend_text(runs.iter().map(|r| crate::written::chars(&r.text)).sum(), at)?;
     Ok((runs, j))
 }
 

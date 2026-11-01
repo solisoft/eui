@@ -189,6 +189,22 @@ release. A wire change lands here first, is released, and then the pin moves.
   grace notes into the next, and played as one note held under them,
   unless a grace note is its own key.
 
+### Security
+
+- A score is read against a budget of what it writes out (score #540):
+  20,000 notes — every note, rest and skip, a chord's every head and `q`'s,
+  grace notes, lyric syllables, the bars a counted rest or skip spans in
+  its metre, each staff as long as the longest — and 40,000 characters of
+  words, each as often as it is drawn. Repeats are counted before they are
+  written out, variables at each use, so a few lines that expand into
+  hundreds of thousands of notes (a repeat in a repeat in a repeat,
+  variables in variables, `R1*1000000`, a long markup on every note of a
+  repeat) are refused in milliseconds — "this music writes out to more
+  than 20,000 notes; the engraver stops there" — by every entry point,
+  instead of tying up the layout. `written_out(src)` answers the count
+  without laying the music out. `\addQuote`'s music is shared between
+  staves, no longer copied into each.
+
 ## [0.11.0] - 2026-10-18
 
 ### Added

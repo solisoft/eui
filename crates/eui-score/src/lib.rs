@@ -40,6 +40,7 @@ mod pdf;
 mod quanting;
 pub mod text;
 mod vertical;
+pub mod written;
 
 pub use draw::{Band, FretGrids, HeadRanges, Path, Ranges, WordRanges};
 pub use engrave::Engraved;
@@ -271,6 +272,14 @@ pub fn protocol(src: &str) -> Result<u32, ScoreError> {
 /// that says nothing of the kind; the refusal for one that is refused.
 pub fn warnings(src: &str) -> Result<Vec<parse::Warning>, ScoreError> {
     guarded(|| parse::parse(src).map(|p| p.warnings))
+}
+
+/// What `src` writes out — the notes' worth and the characters of words
+/// layout would draw ([`written`]) — read without laying it out, for a host
+/// to ask before it engraves; the refusal past either budget, as every
+/// other entry point gives it.
+pub fn written_out(src: &str) -> Result<written::Written, ScoreError> {
+    guarded(|| parse::parse(src).map(|p| p.written))
 }
 
 /// Parse, lay out and place everything, `width` staff spaces wide.

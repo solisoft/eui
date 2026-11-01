@@ -1,0 +1,1 @@
+\scaleDurations 1000/1 { c4 d e f }
