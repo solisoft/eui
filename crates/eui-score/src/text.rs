@@ -113,10 +113,28 @@ pub fn header_lines(header: &HashMap<String, String>, width: f64) -> HeadBlock {
     let mut prev_descent = 0.0;
     for row in rows {
         let [left, centre, right] = row;
+        let (left, right) = (fit_one(left, width), fit_one(right, width));
         let mut broken = fit_lines(&centre.0, centre.1, centre.2, width).into_iter();
         let first = broken.next().unwrap_or((String::new(), centre.2));
-        let mut lines = vec![[fit_one(left, width), (first.0, centre.1, first.1), fit_one(right, width)]];
-        lines.extend(broken.map(|(words, e)| [none(0.0), (words, centre.1, e), none(0.0)]));
+        let first = (first.0, centre.1, first.1);
+        let mut lines = Vec::new();
+        if !crowded(&left, &first, &right, width) {
+            lines.push([left, first, right]);
+            lines.extend(broken.map(|(words, e)| [none(0.0), (words, centre.1, e), none(0.0)]));
+        } else {
+            // Side by side they would touch (a long instrument and composer on
+            // a phone's page): the centre on its own lines, the sides below it,
+            // each on a line of its own if they still meet.
+            lines.push([none(0.0), first, none(0.0)]);
+            lines.extend(broken.map(|(words, e)| [none(0.0), (words, centre.1, e), none(0.0)]));
+            let blank = none(0.0);
+            if crowded(&left, &blank, &right, width) {
+                lines.push([left, none(0.0), none(0.0)]);
+                lines.push([none(0.0), none(0.0), right]);
+            } else {
+                lines.push([left, none(0.0), right]);
+            }
+        }
         for line in lines {
             let mut tallest: f64 = 0.0;
             for cell in &line {
@@ -148,6 +166,24 @@ pub fn header_lines(header: &HashMap<String, String>, width: f64) -> HeadBlock {
     }
     let bottom = if out.is_empty() { 0.0 } else { y + prev_descent + TITLE_PAD };
     HeadBlock { lines: out, bottom }
+}
+
+/// Room kept between two fields of one title line, in staff spaces.
+pub const FIELD_GAP: f64 = 1.0;
+
+/// Whether `left`, `centre` and `right`, set on one line `width` wide (the
+/// left flush left, the centre centred, the right flush right), come closer
+/// than `FIELD_GAP` to one another.
+fn crowded(left: &(String, Weight, f64), centre: &(String, Weight, f64), right: &(String, Weight, f64), width: f64) -> bool {
+    let wide = |cell: &(String, Weight, f64)| if cell.0.is_empty() { None } else { Some(text_width(&cell.0, cell.1, cell.2)) };
+    let (l, c, r) = (wide(left), wide(centre), wide(right));
+    match c {
+        Some(c) => {
+            let from = (width - c) / 2.0;
+            l.is_some_and(|l| l + FIELD_GAP > from) || r.is_some_and(|r| from + c + FIELD_GAP > width - r)
+        }
+        None => matches!((l, r), (Some(l), Some(r)) if l + FIELD_GAP > width - r),
+    }
 }
 
 /// A side field as it fits in `width`: smaller if it is wider.
@@ -253,6 +289,51 @@ mod tests {
         assert_eq!(composers.len(), 1);
         let composer = composers[0];
         assert!(composer.cells.len() == 1 && composer.cells[0].em < em(0.0));
+    }
+
+    /// No two cells of one line closer than `FIELD_GAP`.
+    fn apart(head: &HeadBlock) {
+        for line in &head.lines {
+            let mut spans: Vec<(f64, f64, &str)> = line.cells.iter().map(|c| (c.x, c.x + text_width(&c.text, c.weight, c.em), c.text.as_str())).collect();
+            spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for pair in spans.windows(2) {
+                assert!(pair[0].1 + FIELD_GAP <= pair[1].0 + 1e-9, "{:?} and {:?} touch", pair[0].2, pair[1].2);
+            }
+        }
+    }
+
+    fn line_of<'a>(head: &'a HeadBlock, words: &str) -> &'a HeadLine {
+        head.lines.iter().find(|l| l.cells.iter().any(|c| c.text == words)).expect(words)
+    }
+
+    #[test]
+    fn an_instrument_and_a_composer_that_would_touch_take_a_line_each() {
+        // Tonnerre et Éclairs on a phone (score #511): "Saxo Ténor Sib" ran into "Johann Strauss".
+        let mut header = titled("Tonnerre et Éclairs", "Johann Strauss");
+        header.insert("instrument".to_string(), "Saxo Ténor Sib".to_string());
+        let narrow = header_lines(&header, 50.0);
+        inside(&narrow, 50.0);
+        apart(&narrow);
+        let (instrument, composer) = (line_of(&narrow, "Saxo Ténor Sib"), line_of(&narrow, "Johann Strauss"));
+        assert!(composer.y > instrument.y, "the composer below the instrument");
+        assert_eq!(composer.cells.len(), 1);
+        let c = &composer.cells[0];
+        assert!((c.x + text_width(&c.text, c.weight, c.em) - 50.0).abs() < 1e-6, "still flush right");
+        // On a page wide enough, the same line as ever.
+        let wide = header_lines(&header, 120.0);
+        apart(&wide);
+        assert_eq!(line_of(&wide, "Saxo Ténor Sib").y, line_of(&wide, "Johann Strauss").y);
+        assert!(narrow.bottom > wide.bottom);
+    }
+
+    #[test]
+    fn a_poet_and_a_composer_that_still_meet_go_one_above_the_other() {
+        let mut header = titled("", "Johann Sebastian Bach");
+        header.insert("poet".to_string(), "Christian Friedrich Henrici".to_string());
+        let head = header_lines(&header, 45.0);
+        inside(&head, 45.0);
+        apart(&head);
+        assert!(line_of(&head, "Johann Sebastian Bach").y > line_of(&head, "Christian Friedrich Henrici").y);
     }
 
     #[test]
