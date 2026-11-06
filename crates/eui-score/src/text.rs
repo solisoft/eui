@@ -232,6 +232,7 @@ pub fn fit_lines(words: &str, weight: Weight, em: f64, width: f64) -> Vec<(Strin
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 

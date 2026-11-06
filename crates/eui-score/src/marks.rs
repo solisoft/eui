@@ -652,7 +652,7 @@ pub(crate) fn marks(bars: &mut [Bar], lines: &mut [Line]) {
                 }
                 for ob in range.clone() {
                     for other in &bars[ob].items {
-                        if other.x + 1.5 < x || other.x > x + w + 1.0 {
+                        if other.x + 1.5 < x || ink_left(other) > x + w + 1.0 {
                             continue;
                         }
                         low = low.min(other.reach_up.unwrap_or(0.0) - 0.3);
@@ -731,7 +731,7 @@ fn text_spans(bars: &[Bar], lines: &mut [Line]) {
             let mut edge: f64 = -0.5;
             for b in line.bars.clone() {
                 for ev in &bars[b].items {
-                    if ev.x + item_w(ev) >= x0 - 0.2 && ev.x <= x1 + 0.2 {
+                    if ev.x + item_w(ev) >= x0 - 0.2 && ink_left(ev) <= x1 + 0.2 {
                         edge = edge.min(ev.reach_up.unwrap_or(0.0));
                         if ev.k == Kind::Note {
                             edge = edge.min(ev.stem_end - 0.3);
@@ -815,7 +815,7 @@ fn ottavas(bars: &[Bar], line: &Line) -> Vec<OttavaPlace> {
         let text = if o.abs() == 1 { "8" } else { "15" };
         let e = ottava_em();
         let (bt, bb) = text_box(text, Weight::Bold, e);
-        let near = |ev: &&&Ev| ev.x + item_w(ev) >= x0 - 0.2 && ev.x <= x1 + 0.2;
+        let near = |ev: &&&Ev| ev.x + item_w(ev) >= x0 - 0.2 && ink_left(ev) <= x1 + 0.2;
         let y = if up {
             let edge = items.iter().filter(near).map(|ev| ev.reach_up.unwrap_or(0.0)).fold(-0.5, f64::min);
             edge - 0.6 - bb
@@ -863,7 +863,7 @@ fn rehearsal(bars: &[Bar], line: &Line) -> Vec<MarkPlace> {
             let mut low: f64 = -1.5;
             for ob in line.bars.clone() {
                 for other in &bars[ob].items {
-                    if other.x + item_w(other) < x - 0.5 || other.x > x + w + 0.5 {
+                    if other.x + item_w(other) < x - 0.5 || ink_left(other) > x + w + 0.5 {
                         continue;
                     }
                     low = low.min(other.reach_up.unwrap_or(0.0));
@@ -1050,6 +1050,14 @@ fn item_ink(ev: &Ev) -> (f64, f64) {
         return (1.0 + rest_lift(ev), 3.0 + rest_lift(ev));
     }
     let (mut up, mut down) = (tuplet_edge(ev, true), tuplet_edge(ev, false));
+    // Its accidentals: a natural or a flat stands a space above its head,
+    // and the words over a bar's first note cleared its head but not its
+    // sign (score #668).
+    for hd in ev.heads.iter().filter(|hd| hd.acc.is_some()) {
+        let g = glyph(crate::engrave::acc_name(hd.acc.unwrap_or(0)));
+        up = up.min(y_of(hd.pos) + g.bbox[1]);
+        down = down.max(y_of(hd.pos) + g.bbox[3]);
+    }
     for g in ev.graces.iter().chain(&ev.after_graces) {
         for hd in &g.heads {
             up = up.min(y_of(hd.pos) - 0.4);
@@ -1061,6 +1069,12 @@ fn item_ink(ev: &Ev) -> (f64, f64) {
         }
     }
     (up, down)
+}
+
+/// Where a note's ink starts: its head, or the accidental before it —
+/// what stands over the staff clears the sign as it clears the head.
+fn ink_left(ev: &Ev) -> f64 {
+    ev.heads.iter().filter_map(|hd| hd.acc.map(|acc| ev.x + hd.acc_x.unwrap_or(0.0) + glyph(crate::engrave::acc_name(acc)).bbox[0])).fold(ev.x, f64::min)
 }
 
 pub(crate) fn item_w(ev: &Ev) -> f64 {
@@ -1523,7 +1537,7 @@ fn texts(bars: &[Bar], line: &mut Line) {
                     let mut edge: f64 = -staff_pad;
                     for ob in line.bars.clone() {
                         for other in &bars[ob].items {
-                            if other.x + item_w(other) < x0 - 0.2 || other.x > x1 + 0.2 {
+                            if other.x + item_w(other) < x0 - 0.2 || ink_left(other) > x1 + 0.2 {
                                 continue;
                             }
                             edge = edge.min(other.reach_up.unwrap_or(0.0));
@@ -1544,12 +1558,21 @@ fn texts(bars: &[Bar], line: &mut Line) {
                             edge = edge.min(ntop - 0.2);
                         }
                     }
+                    // A slur over the notes under the words, as LilyPond's
+                    // TextScript goes around it.
+                    for c in &line.curves {
+                        for (px, py) in points(c) {
+                            if px >= x0 - 0.2 && px <= x1 + 0.2 {
+                                edge = edge.min(py - 0.2);
+                            }
+                        }
+                    }
                     edge - pad - bx.1
                 } else {
                     let mut edge: f64 = 4.0 + staff_pad;
                     for ob in line.bars.clone() {
                         for other in &bars[ob].items {
-                            if other.x + item_w(other) < x0 - 0.2 || other.x > x1 + 0.2 {
+                            if other.x + item_w(other) < x0 - 0.2 || ink_left(other) > x1 + 0.2 {
                                 continue;
                             }
                             edge = edge.max(other.reach_down.unwrap_or(4.0));
@@ -1903,4 +1926,106 @@ pub(crate) fn runs_box(runs: &[Run], e: f64) -> (f64, f64) {
         bottom = bottom.max(b - rise);
     }
     (top, bottom)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::engrave::acc_name;
+
+    /// The ink of each accidental drawn on a bar's first note, in staff
+    /// spaces from the staff's top line: left, top, right, bottom.
+    fn first_accidentals(eng: &crate::Engraved, bar: usize) -> Vec<[f64; 4]> {
+        let ev = eng.staves[0][bar].items.iter().find(|e| e.k == Kind::Note).unwrap();
+        ev.heads
+            .iter()
+            .filter_map(|hd| {
+                let acc = hd.acc?;
+                let g = glyph(acc_name(acc));
+                let (ax, ay) = (ev.x + hd.acc_x.unwrap_or(0.0), y_of(hd.pos));
+                Some([ax + g.bbox[0], ay + g.bbox[1], ax + g.bbox[2], ay + g.bbox[3]])
+            })
+            .collect()
+    }
+
+    /// Two boxes `[left, top, right, bottom]` that share ink.
+    fn touch(a: [f64; 4], b: [f64; 4]) -> bool {
+        a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
+    }
+
+    /// A mark over the bar line after `||` — "Al Coda", in roman or italics,
+    /// a segno, a coda, a letter — stands over the natural or the flat of the
+    /// bar's first note, a high one starting a run of sixteenths down under
+    /// a slur and over an ff: it was drawn through the sign (score #668).
+    #[test]
+    fn a_mark_at_a_bars_start_clears_its_first_notes_accidental() {
+        let run = |first: &str| format!(r"{first}16\ff( a'' g'' f'' e'' d'' c'' b' a' g' f' e' f'4)");
+        let mut seen = 0;
+        for (key, first) in [("f", "b''"), ("c", "bes''")] {
+            for mark in [r#"\mark "Al Coda""#, r#"\mark \markup \italic "Al Coda""#, r"\segnoMark", r"\codaMark", r"\mark \default"] {
+                let src = format!(r#"{{ \key {key} \major c'4 d' e' f' \bar "||" {mark} {} }}"#, run(first));
+                let eng = crate::engrave(&src, 120.0, &crate::Layout::default()).unwrap();
+                let line = &eng.systems[0].lines[0];
+                assert_eq!(line.rehearsal.len(), 1, "{src}");
+                let mk = &line.rehearsal[0];
+                let e = mark_em();
+                let (top, bottom) = runs_box(&mk.runs, e);
+                let words = [mk.x, mk.y + top, mk.x + runs_width(&mk.runs, e), mk.y + bottom];
+                for acc in first_accidentals(&eng, 1) {
+                    if words[0] < acc[2] && acc[0] < words[2] {
+                        assert!(!touch(words, acc), "{src}: the mark {words:?} runs into the accidental {acc:?}");
+                        seen += 1;
+                    }
+                }
+            }
+        }
+        assert!(seen >= 4, "\"Al Coda\" stands over the signs: {seen}");
+    }
+
+    /// Words over a note — "To Coda" — run on over the next note's flat:
+    /// they clear it as they clear its head.
+    #[test]
+    fn words_over_a_note_clear_the_next_notes_accidental() {
+        let eng = crate::engrave(r#"{ c''8^"To Coda" bes''8 c''4 c''2 }"#, 120.0, &crate::Layout::default()).unwrap();
+        let line = &eng.systems[0].lines[0];
+        let tx = &line.texts[0];
+        let words = [tx.x0, tx.top, tx.x1, tx.bottom];
+        let ev = &eng.staves[0][0].items[1];
+        let hd = &ev.heads[0];
+        let g = glyph(acc_name(hd.acc.unwrap()));
+        let ax = ev.x + hd.acc_x.unwrap_or(0.0);
+        let flat = [ax + g.bbox[0], y_of(hd.pos) + g.bbox[1], ax + g.bbox[2], y_of(hd.pos) + g.bbox[3]];
+        assert!(words[0] < flat[2] && flat[0] < words[2], "the words reach over the flat");
+        assert!(!touch(words, flat), "the words {words:?} run into the flat {flat:?}");
+    }
+
+    /// The bar the user saw: "Al Coda" over the rest ending a bar runs on
+    /// past the `||` over the next bar's first note, a natural starting a
+    /// slurred run of sixteenths down over an ff (score #668).
+    #[test]
+    fn words_before_a_double_bar_clear_the_next_bars_natural() {
+        let src = r#"{ \key g \major \time 2/4 b'4 r8 r8^"Al Coda" \bar "||" f''16\ff( e'' d'' c'' b'8) r8 }"#;
+        let eng = crate::engrave(src, 120.0, &crate::Layout::default()).unwrap();
+        let tx = &eng.systems[0].lines[0].texts[0];
+        let words = [tx.x0, tx.top, tx.x1, tx.bottom];
+        let natural = first_accidentals(&eng, 1)[0];
+        assert!(words[0] < natural[2] && natural[0] < words[2], "the words reach over the natural");
+        assert!(!touch(words, natural), "the words {words:?} run into the natural {natural:?}");
+    }
+
+    /// The same bar with no sign on its first note: the words clear the
+    /// slur starting under them.
+    #[test]
+    fn words_before_a_double_bar_clear_the_next_bars_slur() {
+        let src = r#"{ \time 2/4 b'4 r8 r8^"Al Coda" \bar "||" f''16\ff( e'' d'' c'' b'8) r8 }"#;
+        let eng = crate::engrave(src, 120.0, &crate::Layout::default()).unwrap();
+        let line = &eng.systems[0].lines[0];
+        let tx = &line.texts[0];
+        let under: Vec<(f64, f64)> = line.curves.iter().flat_map(|c| points(c)).filter(|p| p.0 >= tx.x0 && p.0 <= tx.x1).collect();
+        assert!(!under.is_empty(), "the slur starts under the words");
+        for (px, py) in under {
+            assert!(tx.bottom + 0.4 <= py, "the words reach {} by the slur at ({px}, {py})", tx.bottom);
+        }
+    }
 }
