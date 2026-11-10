@@ -1992,10 +1992,11 @@ impl Shell {
         #[cfg(has_a11y)]
         let access = (!std::env::var("EUI_A11Y").is_ok_and(|v| v == "0")).then(|| accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, EventLoopProxy::clone(&proxy)));
 
-        // Vulkan, Metal or DX12 — never GL on a desktop: on Linux a GL
-        // instance loads Mesa's gallium and its LLVM (34 MB of the window's
-        // 64 MB PSS, measured), for a backend the primary ones make
-        // unneeded.
+        // Vulkan, Metal or DX12 — not GL on a desktop while one of those
+        // answers: on Linux a GL instance loads Mesa's gallium and its LLVM
+        // (34 MB of the window's 64 MB PSS, measured), for a backend the
+        // primary ones make unneeded. Linux falls back to GL only when none
+        // gives an adapter (below).
         //
         // Android is the exception, and it is not a small one: there is no
         // Mesa and no LLVM to load there — GLES *is* the system driver — and
@@ -2025,25 +2026,50 @@ impl Shell {
         let surface = match shared.as_ref() {
             Some(g) => make_surface(&g.instance)?,
             None => {
-                let backends = if cfg!(target_os = "android") { wgpu::Backends::PRIMARY | wgpu::Backends::GL } else { wgpu::Backends::PRIMARY };
-                // The display is the instance's since wgpu 29, not each
-                // surface's: given once here, from the loop that owns it.
-                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends, ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(event_loop.owned_display_handle())) });
-                let surface = make_surface(&instance)?;
-                // The adapter is chosen for the first window's surface, so
-                // it is asked to be compatible with it.
-                let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::LowPower,
-                    compatible_surface: Some(&surface),
-                    force_fallback_adapter: false,
-                    apply_limit_buckets: false,
-                }));
-                let adapter = match adapter {
-                    Ok(a) => a,
-                    Err(e) => {
-                        eprintln!("eui: no GPU adapter: {e}");
-                        return None;
+                let primary = if cfg!(target_os = "android") { wgpu::Backends::PRIMARY | wgpu::Backends::GL } else { wgpu::Backends::PRIMARY };
+                // GL as a second try on Linux, and only there and only
+                // second: a machine whose GPU speaks OpenGL and no Vulkan —
+                // a virtual machine on virgl, which is what QEMU's 3D
+                // virtio-gpu is — has no adapter among the primary ones,
+                // and the window would refuse to open. Where Vulkan answers,
+                // the GL instance is never made, so the cost above is not
+                // paid. `WGPU_BACKEND` (wgpu's own variable) chooses outright.
+                let tries: Vec<wgpu::Backends> = match wgpu::Backends::from_env() {
+                    Some(forced) => vec![forced],
+                    None if cfg!(target_os = "linux") => vec![primary, wgpu::Backends::GL],
+                    None => vec![primary],
+                };
+                let mut found = None;
+                let mut last = String::from("no backend to try");
+                for backends in tries {
+                    // The display is the instance's since wgpu 29, not each
+                    // surface's: given once here, from the loop that owns it.
+                    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends, ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(event_loop.owned_display_handle())) });
+                    let surface = match instance.create_surface(Arc::clone(&window)) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            last = format!("cannot create a surface: {e}");
+                            continue;
+                        }
+                    };
+                    // The adapter is chosen for the first window's surface,
+                    // so it is asked to be compatible with it.
+                    match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: wgpu::PowerPreference::LowPower,
+                        compatible_surface: Some(&surface),
+                        force_fallback_adapter: false,
+                        apply_limit_buckets: false,
+                    })) {
+                        Ok(adapter) => {
+                            found = Some((instance, surface, adapter));
+                            break;
+                        }
+                        Err(e) => last = format!("no GPU adapter: {e}"),
                     }
+                }
+                let Some((instance, surface, adapter)) = found else {
+                    eprintln!("eui: {last}");
+                    return None;
                 };
                 let renderer = match eui_render::Renderer::with_adapter(&adapter) {
                     Ok(r) => r,

@@ -226,6 +226,11 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Changed
 
+- **Linux: OpenGL when Vulkan gives nothing.** The window still asks wgpu
+  for the primary backends first; with no adapter among them (a virtual
+  machine whose GPU is virgl, which speaks OpenGL only) it tries GL
+  before refusing to open. `WGPU_BACKEND` chooses outright.
+
 - A key typed into a text field reaches a `key_down` handler above the
   field only if that handler names it in `keys` (spec 03 §3.1): a page's
   shortcuts on its root no longer fire while someone types — a `Backspace`

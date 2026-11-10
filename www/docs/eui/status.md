@@ -1044,7 +1044,9 @@ we opened a GPU device; 8 MB is the binary's own text, 10 MB heap and
 6 MB anonymous are the client (atlases, session, transport), 5 MB the
 Vulkan driver itself. The GL backend used to be initialised alongside
 Vulkan and brought Mesa's gallium and a second LLVM mapping; the window
-now asks wgpu for the primary backends only. The worker beside it is
+now asks wgpu for the primary backends only, and on Linux makes a GL
+instance only when none of them gives an adapter (a virtual machine whose
+GPU is virgl has OpenGL and no Vulkan). `WGPU_BACKEND` chooses outright. The worker beside it is
 17 MB. RSS reads higher (97 MB) because it counts every shared page
 whole.
 
