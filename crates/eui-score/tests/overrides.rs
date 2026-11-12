@@ -126,6 +126,13 @@ fn directions_of_slurs_ties_dynamics_words_scripts_fingers_and_tuplets() {
     assert!(script_y("{ c'4-> }") > 4.0, "stem up: the accent under the head");
     assert!(script_y("{ \\override Script.direction = #UP c'4-> }") < 0.0);
     assert!(script_y("{ \\override Script.direction = #DOWN c''4-> }") > 4.0);
+    // Two voices: the first's accents over its stems, the second's under them.
+    let ys = |src: &str| line(&eng(src)).scripts.iter().map(|sc| sc.y).collect::<Vec<f64>>();
+    let two = ys("{ << { a'4-> a' a' a' } \\\\ { d'4-> d' d' d' } >> }");
+    assert!(two[0] < 0.0 && two[1] > 4.0, "over the first voice, under the second: {two:?}");
+    let drums = ys("\\new DrumStaff \\drummode { << { sn8-> sn sn sn sn sn sn sn } \\\\ { tomfl4. tomfl4. tomfl4 } >> }");
+    assert!(drums[0] < 0.0, "a drum's accent over its beam: {drums:?}");
+    assert!(ys("{ << { a'4_> a' a' a' } \\\\ { d'1 } >> }")[0] > 2.0, "written under stays under");
     // A fingering above unless said.
     let finger_y = |src: &str| line(&eng(src)).scripts[0].y;
     assert!(finger_y("{ c''4-3 }") < 2.0);

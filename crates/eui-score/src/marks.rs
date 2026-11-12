@@ -1161,6 +1161,14 @@ fn scripts(bars: &mut [Bar], line: &mut Line) {
                 if dir == 0 {
                     dir = ev.look.side("Script").unwrap_or(0);
                 }
+                // Two voices: the first's over its stems, the second's under
+                // them, as `\voiceOne` and `\voiceTwo` set Script.direction —
+                // opposite the stem, the first's would sit in the second's notes.
+                if dir == 0 {
+                    if let Some(v) = ev.voice.filter(|_| !ev.free) {
+                        dir = if v % 2 == 1 { -1 } else { 1 };
+                    }
+                }
                 if dir == 0 && rule.side != 0 {
                     dir = rule.side;
                 }
