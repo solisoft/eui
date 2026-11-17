@@ -8,7 +8,7 @@ use crate::draw::{dot_start, past_flag, tremolo_reach};
 use crate::engrave::{barline_width, rest_name, stem_x, y_of, Line};
 use crate::glyphs::{glyph, Weight};
 use crate::measure::Bar;
-use crate::parse::{Ev, Kind, Run, StaffKind, Tempo};
+use crate::parse::{Ev, Kind, Run, StaffKind, Tempo, Words};
 use crate::text::{args_of, em, text_box, text_width};
 use crate::RULE;
 
@@ -1285,14 +1285,15 @@ fn rehearsal(bars: &[Bar], line: &Line) -> Vec<MarkPlace> {
     let e = mark_em();
     for (bi, b) in line.bars.clone().enumerate() {
         let bar = &bars[b];
-        for (pos, words) in &bar.marks {
+        for (pos, dir, pieces) in &together(&bar.marks) {
+            let (pos, dir) = (pos, *dir);
             // Its formatter's frame, its alignment and its moves (score #403).
-            let (style, runs) = crate::look::mark_style(&words.pieces());
+            let (style, runs) = crate::look::mark_style(pieces);
             let runs = if style.bars { vec![Run::words(bar.number.to_string(), Weight::Bold)] } else { runs };
             let framed = if style.frame.is_empty() { 0.0 } else { FRAME_PAD };
             let w = runs_width(&runs, e);
             let (_, foot) = runs_box(&runs, e);
-            let (anchor, align) = if *pos >= bar.length && words.dir > 0 {
+            let (anchor, align) = if *pos >= bar.length && dir > 0 {
                 // A jump ends at its bar line, as LilyPond right-aligns it.
                 (bar.x1 + barline_width(bar.drawn()) / 2.0, 1.0)
             } else if *pos >= bar.length {
@@ -1304,6 +1305,12 @@ fn rehearsal(bars: &[Bar], line: &Line) -> Vec<MarkPlace> {
             } else {
                 (bar.items.iter().find(|ev| ev.start >= *pos).map_or(bar.x0, |ev| ev.x), 0.0)
             };
+            // Over the bar line an ending's bracket stops at, it starts past
+            // the bracket: centred it would stand half over the bracket and
+            // climb above it, away from its own staff (score #939).
+            let ending = dir < 0 && align == 0.0 && style.align.is_none() && style.x.is_none();
+            let bracket = line.voltas.iter().find(|vb| ending && vb.x0 < anchor && (vb.x1 - anchor).abs() < 1.0);
+            let (anchor, align) = bracket.map_or((anchor, align), |vb| (vb.x1 + 0.3 + framed, -1.0));
             let align = style.align.unwrap_or(align).clamp(-1.0, 1.0);
             let anchor = anchor + style.x.unwrap_or(0.0);
             let x = anchor - w * (align + 1.0) / 2.0 + if *pos == 0 && bi == 0 { framed } else { 0.0 };
@@ -1360,6 +1367,34 @@ fn rehearsal(bars: &[Bar], line: &Line) -> Vec<MarkPlace> {
                 y = 2.0 - v;
             }
             out.push(MarkPlace { runs, x: x + style.extra.0, y: y + style.extra.1, frame: style.frame });
+        }
+    }
+    out
+}
+
+/// A bar's marks as they are set: two written at one place — a coda and
+/// the section's name, `\codaMark \mark "Trio"` — are one mark, the sign
+/// before the words, rather than one over the other (score #939). A mark
+/// with a look of its own (a frame, a move) and a jump stay alone.
+fn together(marks: &[(i64, Words)]) -> Vec<(i64, i64, Vec<Run>)> {
+    let mut out: Vec<(i64, i64, Vec<Run>)> = Vec::new();
+    for (pos, words) in marks {
+        let pieces = words.pieces();
+        let plain = |runs: &[Run]| crate::look::mark_style(runs).0 == crate::look::MarkStyle::default();
+        let sign = pieces.iter().all(|r| r.glyph);
+        match out.last_mut() {
+            Some((at, dir, runs)) if *at == *pos && *dir < 0 && words.dir < 0 && plain(runs) && plain(&pieces) => {
+                let (mut first, mut second) = (std::mem::take(runs), pieces);
+                if sign && !first.iter().all(|r| r.glyph) {
+                    std::mem::swap(&mut first, &mut second);
+                }
+                if let Some(r) = second.first_mut() {
+                    r.gap = true;
+                }
+                first.extend(second);
+                *runs = first;
+            }
+            _ => out.push((*pos, words.dir, pieces)),
         }
     }
     out
@@ -2706,6 +2741,36 @@ mod tests {
             }
         }
         assert!(seen >= 4, "\"Al Coda\" stands over the signs: {seen}");
+    }
+
+    /// A coda and the section's name written at the bar line an ending's
+    /// bracket stops at (score #939): one mark, the sign before the words,
+    /// starting past the bracket and no higher than it — not centred on the
+    /// bar line and stacked over the bracket, by the system above.
+    #[test]
+    fn a_coda_and_a_name_after_an_ending_stand_beside_its_bracket() {
+        let tune = |marks: &str| format!(r#"{{ \time 2/4 \repeat volta 2 {{ c''4 c'' }} \alternative {{ {{ d''4 r }} {{ d''4 r }} }} \bar "||" {marks} e''4 e'' | c''2 }}"#);
+        for marks in [r#"\codaMark \mark "Trio""#, r#"\mark "Trio" \codaMark"#] {
+            let eng = crate::engrave(&tune(marks), 120.0, &crate::Layout::default()).unwrap();
+            let line = &eng.systems[0].lines[0];
+            assert_eq!(line.rehearsal.len(), 1, "{marks}: one mark");
+            let mk = &line.rehearsal[0];
+            assert!(mk.runs[0].glyph && mk.runs[0].text == "coda", "{marks}: the sign first");
+            assert_eq!(mk.runs[1].text, "Trio");
+            let vb = line.voltas.last().unwrap();
+            assert!(mk.x >= vb.x1, "{marks}: it starts past the bracket: {} < {}", mk.x, vb.x1);
+            assert!(mk.y > vb.y - 0.4, "{marks}: it stands beside the bracket, not over it: {} against {}", mk.y, vb.y);
+        }
+        // Away from an ending, a mark is still centred on its bar line.
+        let eng = crate::engrave(r#"{ c''1 \bar "||" \mark "Trio" c''1 }"#, 120.0, &crate::Layout::default()).unwrap();
+        let line = &eng.systems[0].lines[0];
+        let mk = &line.rehearsal[0];
+        let bar = &eng.staves[0][0];
+        let w = runs_width(&mk.runs, mark_em());
+        assert!((mk.x + w / 2.0 - bar.x1).abs() < 0.5, "centred on the bar line: {} around {}", mk.x + w / 2.0, bar.x1);
+        // A jump and a letter at one bar line stay two marks.
+        let eng = crate::engrave(r#"{ c''1 \jump "D.S." \mark \default c''1 }"#, 120.0, &crate::Layout::default()).unwrap();
+        assert_eq!(eng.systems[0].lines[0].rehearsal.len(), 2);
     }
 
     /// Words over a note — "To Coda" — run on over the next note's flat:

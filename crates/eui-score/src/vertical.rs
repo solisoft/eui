@@ -176,6 +176,16 @@ impl Skyline {
         }
     }
 
+    /// Every column from `x0` to `x1` with ink reaching `by` higher.
+    pub(crate) fn raise_between(&mut self, x0: f64, x1: f64, by: f64) {
+        for (k, t) in self.top.iter_mut().enumerate() {
+            let x = self.x0 + k as f64 * COLUMN;
+            if t.is_finite() && x + COLUMN > x0 && x < x1 {
+                *t -= by;
+            }
+        }
+    }
+
     /// How far below `self`'s reference point `under`'s must be for no ink
     /// of `under` to come above any ink of `self` in the same column: none
     /// when no column has ink of both.

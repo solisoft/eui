@@ -188,3 +188,18 @@ fn a_crowded_page_squeezes_the_staves_of_its_systems_too() {
         }
     }
 }
+
+/// A mark over a system's staff keeps further from the system above than
+/// other ink does (score #939): the padding between systems and a space
+/// and a half more, so it is not read as the upper system's.
+#[test]
+fn a_mark_keeps_further_from_the_system_above() {
+    let src = "{ c''4 c'' c'' c'' \\break \\mark \\markup \\bold \"Trio\" c4 c c c }";
+    let e = engrave(src, 80.0, &Layout::default()).unwrap();
+    let step = e.systems[1].top - e.systems[0].top;
+    let mk = &e.systems[1].lines[0].rehearsal[0];
+    // The upper staff's bottom line is 4 under its top; from a space over the
+    // baseline: 3.5 with the padding alone, 5 with the mark's room.
+    let gap = step + mk.y - 1.0 - 4.0;
+    assert!(gap >= 4.5, "{gap} between the staff above and the mark (baseline {}, step {step})", mk.y);
+}

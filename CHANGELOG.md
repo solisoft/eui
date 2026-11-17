@@ -425,6 +425,12 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Fixed
 
+- Two marks written at one place — `\codaMark \mark "Trio"` — are one
+  mark, the sign before the words, where they stood one over the other; over
+  the bar line an ending's bracket stops at, a mark starts past the bracket
+  where it was centred and climbed over it; and a mark over a staff keeps a
+  space and a half more from the system above, where a section's name read
+  as the upper system's (score #939).
 - A score's ending bracket ("1.", "2.") stands over the words above the
   staff under it — a chord name such as `^"E7"` on an ending's first note
   was drawn through the bracket's number — and over the scripts, tuplet

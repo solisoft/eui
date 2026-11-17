@@ -2235,6 +2235,10 @@ pub(crate) fn beam_y(g: &Beam, x: f64) -> f64 {
 
 // ---- Vertical spacing -----------------------------------------------------
 
+/// How much further than other ink a mark over the staff keeps from the
+/// system above, in staff spaces.
+const MARK_ROOM: f64 = 1.5;
+
 /// The skyline of staff `s`'s line on a system: its ink, column by column.
 fn skyline_of(staves: &[Vec<Bar>], sys: &System, s: usize) -> Skyline {
     let sp = 10.0;
@@ -2244,6 +2248,12 @@ fn skyline_of(staves: &[Vec<Bar>], sys: &System, s: usize) -> Skyline {
     // (LilyPond's `nonstaff-unrelatedstaff-spacing`, padding 1.5).
     if let Some(y) = line.lyric_y {
         sky.lower_from(y - 1.0, 0.5);
+    }
+    // A mark over the staff — a letter, a coda, a section's name — belongs
+    // to the music under it: it keeps further from the system above than
+    // other ink does, so it is not read as that system's (score #939).
+    for mk in &line.rehearsal {
+        sky.raise_between(mk.x, mk.x + crate::marks::runs_width(&mk.runs, crate::marks::mark_em()), MARK_ROOM);
     }
     sky
 }
