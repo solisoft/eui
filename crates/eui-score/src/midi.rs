@@ -34,7 +34,7 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
     for (stf, timed) in parsed.staves.iter().zip(&timed) {
         measured.push(measures(timed.as_deref().unwrap_or(&stf.events))?);
     }
-    let holds = holds(&measured);
+    let holds = holds(&measured, opts);
     let mut tracks: Vec<Vec<u8>> = Vec::new();
     for (si, stf) in parsed.staves.iter().enumerate() {
         // Chord names are read, not played, as LilyPond's \\midi has them.
@@ -87,7 +87,7 @@ struct Hairpin {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, name: &str, channel: i64, first_track: bool) -> Vec<u8> {
+fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], program: i64, name: &str, channel: i64, first_track: bool) -> Vec<u8> {
     let mut ev_out: Vec<(i64, i64, Vec<u8>)> = Vec::new();
     if !name.is_empty() {
         let mut meta = vec![255, 3];
@@ -184,7 +184,10 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
     }
     if !holds.is_empty() {
         for e in &mut ev_out {
-            e.0 = held(holds, e.0);
+            // A note let go where a fermata ends is let go once it is held;
+            // what starts there waits for the breath too (score #977).
+            let off = e.2.first().is_some_and(|b| b & 0xF0 == 0x80);
+            e.0 = held(holds, e.0, off);
         }
     }
     ev_out.sort_by_key(|e| e.0 * 4 + e.1);
@@ -287,14 +290,34 @@ fn play(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, sounding: &mut Vec<(i64, Sounding
     }
 }
 
-/// Where the fermatas hold: (tick the held note ends, ticks it is held
-/// for), over every staff, in time order.
-pub(crate) fn holds(measured: &[Vec<Bar>]) -> Vec<(i64, i64)> {
+/// How long the music breathes after a fermata, in seconds (score #977).
+pub const FERMATA_BREATH_SECONDS: f64 = 2.0;
+
+/// A fermata's hold: where the held note ends (`ends`), how much longer it
+/// sounds (`sustain`: half its value again, so 1.5 times it), then the
+/// silence before the music goes on (`breath`: FERMATA_BREATH_SECONDS at
+/// the tempo of that moment), in ticks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hold {
+    pub ends: i64,
+    pub sustain: i64,
+    pub breath: i64,
+}
+
+/// Where the fermatas hold, over every staff, in time order: of several
+/// notes under a fermata that end together, the longest is the one held.
+pub(crate) fn holds(measured: &[Vec<Bar>], opts: &MidiOptions) -> Vec<Hold> {
     let mut by_end: Vec<(i64, i64)> = Vec::new();
+    let mut tempi: Vec<(i64, f64)> = Vec::new();
     for bars in measured {
         let mut at = 0;
         for bar in bars {
             for ev in &bar.items {
+                if let Some(mark) = &ev.tempo {
+                    if mark.bpm > 0 {
+                        tempi.push((at + ev.start, quarter_seconds(mark.bpm as f64, mark.base)));
+                    }
+                }
                 if ev.k == Kind::Note && ev.scripts.iter().any(|sc| sc.name == "fermata") {
                     let span = ev.ticks * ev.mm.unwrap_or(1);
                     let ends = at + ev.start + span;
@@ -308,12 +331,37 @@ pub(crate) fn holds(measured: &[Vec<Bar>]) -> Vec<(i64, i64)> {
         }
     }
     by_end.sort_by_key(|h| h.0);
+    tempi.sort_by_key(|t| t.0);
+    // A source with no `\tempo` plays at the options' tempo, or at MIDI's
+    // own, 120 quarters a minute, when they give none.
+    let start = if opts.bpm > 0.0 { quarter_seconds(opts.bpm, opts.beat) } else { 0.5 };
     by_end
+        .into_iter()
+        .map(|(ends, span)| {
+            let quarter = tempi.iter().take_while(|t| t.0 < ends).last().map_or(start, |t| t.1);
+            Hold { ends, sustain: span / 2, breath: breath_ticks(quarter) }
+        })
+        .collect()
 }
 
-/// A time moved past every hold that ends at it or before.
-pub(crate) fn held(holds: &[(i64, i64)], t: i64) -> i64 {
-    t + holds.iter().filter(|h| h.0 <= t).map(|h| h.1).sum::<i64>()
+/// A quarter's length in seconds at `bpm` beats of `beat` (4 a quarter) a minute.
+fn quarter_seconds(bpm: f64, beat: i64) -> f64 {
+    60.0 / bpm * beat as f64 / 4.0
+}
+
+/// FERMATA_BREATH_SECONDS in ticks, when a quarter lasts `quarter` seconds.
+pub(crate) fn breath_ticks(quarter: f64) -> i64 {
+    if quarter <= 0.0 {
+        return 0;
+    }
+    (FERMATA_BREATH_SECONDS / quarter * (WHOLE / 4) as f64).round() as i64
+}
+
+/// A time moved past every hold before it: by the held note's extra length
+/// and its breath. At a hold's own end, a note let go (`off`) moves by the
+/// extra length only; anything else there starts after the breath.
+pub(crate) fn held(holds: &[Hold], t: i64, off: bool) -> i64 {
+    t + holds.iter().filter(|h| h.ends <= t).map(|h| if h.ends == t && off { h.sustain } else { h.sustain + h.breath }).sum::<i64>()
 }
 
 fn hairpin_of(bars: &[Bar], bi: usize, start: &crate::parse::Ev, volume: f64) -> Hairpin {
