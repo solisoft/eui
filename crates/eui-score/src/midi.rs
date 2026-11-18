@@ -172,13 +172,13 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], program: i64, name: &
             // What `\partCombine` leaves out of the staff, played all the
             // same (score #412).
             for (off, u) in &ev.unseen {
-                play(&mut ev_out, &mut sounding_unseen, u, at + ev.start + off, u.ticks, volume, channel);
+                play(&mut ev_out, &mut sounding_unseen, u, at + ev.start + off, u.ticks, volume, channel, bar.fifths);
             }
             // A cue is another part's notes, to read: not played.
             if ev.k != Kind::Note || ev.cue {
                 continue;
             }
-            play(&mut ev_out, &mut sounding, ev, t0, span, volume, channel);
+            play(&mut ev_out, &mut sounding, ev, t0, span, volume, channel, bar.fifths);
         }
         at += bar.length * bar.span.unwrap_or(1);
     }
@@ -209,7 +209,7 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], program: i64, name: &
 /// laid out in a bar (one `\partCombine` leaves out) has no heads yet:
 /// its pitches are its keys.
 #[allow(clippy::too_many_arguments)]
-fn play(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, sounding: &mut Vec<(i64, Sounding)>, ev: &crate::parse::Ev, t0: i64, span: i64, volume: f64, channel: i64) {
+fn play(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, sounding: &mut Vec<(i64, Sounding)>, ev: &crate::parse::Ev, t0: i64, span: i64, volume: f64, channel: i64, fifths: i64) {
     let heads: Vec<(i64, i64)> = if ev.heads.is_empty() { ev.pitches.iter().map(|p| (p.d, p.alter)).collect() } else { ev.heads.iter().map(|h| (h.d, h.alter)).collect() };
     let has = |n: &str| ev.scripts.iter().any(|sc| sc.name == n);
     let mut vel = volume;
@@ -270,6 +270,13 @@ fn play(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, sounding: &mut Vec<(i64, Sounding
         }
         return;
     }
+    // A trill, a mordent, a turn, a rolled chord: played as written out
+    // (score #978). Not on a drum staff, nor with grace notes after it.
+    let ornament = ORNAMENTS.into_iter().find(|n| has(n));
+    if (ornament.is_some() || ev.arpeggio) && ev.drums.is_empty() && ev.after_graces.is_empty() && !heads.is_empty() {
+        ornamented(ev_out, &heads, ornament, ev.arpeggio, t0, length, vel, channel, fifths);
+        return;
+    }
     for &(d, alter) in &heads {
         let key = ev.drums.iter().find(|dr| dr.d == d).map_or_else(|| key_of(d, alter), |dr| dr.key);
         if let Some((_, held)) = sounding.iter_mut().find(|(k, _)| *k == key) {
@@ -287,6 +294,81 @@ fn play(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, sounding: &mut Vec<(i64, Sounding
             Some(slot) => slot.1 = s,
             None => sounding.push((key, s)),
         }
+    }
+}
+
+/// The ornaments played (score #978), as LilyPond's articulate.ly plays them.
+const ORNAMENTS: [&str; 4] = ["trill", "prall", "mordent", "turn"];
+
+/// A note's ornament, `ornament`, and its chord rolled when `rolled`, from
+/// `t0` for `length` (score #978). A rolled chord's notes come in from the
+/// lowest, a 64th apart (half the note at most between the first and the
+/// last), and all are held to its end. The ornament is the top note's, in
+/// 32nds (a quarter of the note at most each), its neighbours the key's:
+/// a trill goes between the note and the one above to the note's end; a
+/// prall is the note, the one above, the note; a mordent the note, the one
+/// below, the note; a turn the one above, the note, the one below, the note.
+#[allow(clippy::too_many_arguments)]
+fn ornamented(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, heads: &[(i64, i64)], ornament: Option<&str>, rolled: bool, t0: i64, length: i64, vel: u8, channel: i64, fifths: i64) {
+    let mut keys: Vec<(i64, i64, i64)> = heads.iter().map(|&(d, alter)| (key_of(d, alter), d, alter)).collect();
+    keys.sort_unstable();
+    keys.dedup_by_key(|k| k.0);
+    let end = t0 + length.max(1);
+    let n = keys.len() as i64;
+    let roll = if rolled && n > 1 { (WHOLE / 64).min(length / 2 / (n - 1)).max(0) } else { 0 };
+    let mut sound = |key: i64, from: i64, to: i64| {
+        if to > from {
+            ev_out.push((from, 1, vec![(144 + channel) as u8, key as u8, vel]));
+            ev_out.push((to, 0, vec![(128 + channel) as u8, key as u8, 64]));
+        }
+    };
+    for (i, &(key, _, _)) in keys.iter().enumerate().take(keys.len().saturating_sub(1)) {
+        sound(key, t0 + i as i64 * roll, end);
+    }
+    let Some(&(top, d, _)) = keys.last() else { return };
+    let start = t0 + (n - 1) * roll;
+    let room = end - start;
+    let unit = (WHOLE / 32).min(room / 4).max(1);
+    let above = key_of(d + 1, in_key(d + 1, fifths));
+    let below = key_of(d - 1, in_key(d - 1, fifths));
+    let turn: &[i64] = match ornament {
+        Some("prall") => &[top, above],
+        Some("mordent") => &[top, below],
+        Some("turn") => &[above, top, below],
+        _ => &[],
+    };
+    let mut t = start;
+    if ornament == Some("trill") {
+        let mut upper = false;
+        while t < end {
+            let next = (t + unit).min(end);
+            sound(if upper { above } else { top }, t, next);
+            upper = !upper;
+            t = next;
+        }
+        return;
+    }
+    for &key in turn {
+        let next = (t + unit).min(end);
+        sound(key, t, next);
+        t = next;
+    }
+    sound(top, t, end);
+}
+
+/// The alteration the key of `fifths` gives the step of `d`: a sharp for the
+/// first `fifths` of F C G D A E B, a flat for the first of B E A D G C F.
+pub(crate) fn in_key(d: i64, fifths: i64) -> i64 {
+    const SHARPS: [i64; 7] = [3, 0, 4, 1, 5, 2, 6];
+    const FLATS: [i64; 7] = [6, 2, 5, 1, 4, 0, 3];
+    let step = modulo(d, 7);
+    let count = fifths.unsigned_abs().min(7) as usize;
+    if fifths > 0 && SHARPS[..count].contains(&step) {
+        1
+    } else if fifths < 0 && FLATS[..count].contains(&step) {
+        -1
+    } else {
+        0
     }
 }
 
