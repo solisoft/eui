@@ -1869,26 +1869,49 @@ fn draw_arpeggio(pen: &mut Pen, x: f64, y0: f64, y1: f64) {
     }
 }
 
-/// A tremolo's strokes across a stem at `x`, centred on `y` — or over a
-/// whole note's head: a stroke for each beam the repetition has that the
-/// note has not.
-fn draw_tremolo(pen: &mut Pen, ev: &Ev, top: f64, x: f64, y: f64, up: bool) {
-    let _ = top;
+/// How far a whole note's tremolo strokes start from its head's middle.
+const TREMOLO_OFF_HEAD: f64 = 1.4;
+/// How much a tremolo's stroke rises across its width.
+const TREMOLO_RISE: f64 = 0.5;
+
+/// The strokes a tremolo draws: one for each beam the repetition has that
+/// the note has not, one at least.
+fn tremolo_strokes(ev: &Ev) -> i64 {
     let mut strokes = 0;
     let mut v = ev.tremolo;
     while v > 4 {
         strokes += 1;
         v /= 2;
     }
-    let n = (strokes - flags(ev.base)).max(1);
-    let (w, rise) = (if ev.base == 1 { 1.4 } else { 1.1 }, 0.5);
+    (strokes - flags(ev.base)).max(1)
+}
+
+/// How far a whole note's tremolo reaches past its head's middle — over
+/// its highest head when its stem would go up, under its lowest otherwise —
+/// ink and all, for what is placed around it (score #982); none for a note
+/// with a stem, whose strokes stay on it.
+pub(crate) fn tremolo_reach(ev: &Ev) -> Option<f64> {
+    if ev.base != 1 || ev.tremolo <= 0 {
+        return None;
+    }
+    let height = (tremolo_strokes(ev) - 1) as f64 * RULE.beam_step;
+    Some(TREMOLO_OFF_HEAD + height + (TREMOLO_RISE + RULE.beam) / 2.0)
+}
+
+/// A tremolo's strokes across a stem at `x`, centred on `y` — or over a
+/// whole note's head: a stroke for each beam the repetition has that the
+/// note has not.
+fn draw_tremolo(pen: &mut Pen, ev: &Ev, top: f64, x: f64, y: f64, up: bool) {
+    let _ = top;
+    let n = tremolo_strokes(ev);
+    let (w, rise) = (if ev.base == 1 { 1.4 } else { 1.1 }, TREMOLO_RISE);
     let step = RULE.beam_step;
     let height = (n - 1) as f64 * step;
     let first = if ev.base == 1 {
         if up {
-            y - 1.4 - height
+            y - TREMOLO_OFF_HEAD - height
         } else {
-            y + 1.4
+            y + TREMOLO_OFF_HEAD
         }
     } else {
         y - height / 2.0

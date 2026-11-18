@@ -100,3 +100,26 @@ fn a_tempo_mark_clears_the_grace_notes_under_it() {
     }
     assert_eq!(seen, 2);
 }
+
+/// A whole note's tremolo strokes hang under its head (its stem would go
+/// down): a dynamic under the note goes under them, not through them —
+/// the "p" of `c''1:32\p\<` was drawn across the last stroke (score #982).
+#[test]
+fn a_dynamic_goes_under_a_whole_notes_tremolo() {
+    let dyn_y = |src: &str| {
+        let eng = engrave(src, 120.0, &Layout::default()).unwrap();
+        let line = &eng.systems[0].lines[0];
+        let d = line.dynamics.iter().find(|d| d.text.is_some()).expect("a dynamic");
+        (d.y, d.y + d.top)
+    };
+    let (plain, _) = dyn_y(r"{ c''1\p }");
+    let (y, ink_top) = dyn_y(r"{ c''1:32\p\< d''1\! }");
+    assert!(y > plain, "lower with the strokes ({y}) than without ({plain})");
+    // c'' is a space and a half under the top line; three strokes start
+    // 1.4 under its middle, 0.75 apart, half a beam and half a rise thick.
+    let c2 = 1.5;
+    let strokes_bottom = c2 + 1.4 + 2.0 * 0.75 + (0.5 + 0.48) / 2.0;
+    assert!(ink_top >= strokes_bottom, "the dynamic's top ({ink_top}) clears the strokes ({strokes_bottom})");
+    // A low note's strokes go over its head: under it, nothing moves.
+    assert_eq!(dyn_y(r"{ c'1:32\p }").0, dyn_y(r"{ c'1\p }").0);
+}

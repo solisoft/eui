@@ -3,7 +3,7 @@
 //! marks, and how far all of it reaches (`eui_builders_score.sl`, "Ties and
 //! slurs" and "Expression").
 
-use crate::draw::{dot_start, past_flag};
+use crate::draw::{dot_start, past_flag, tremolo_reach};
 use crate::engrave::{barline_width, clef_glyph, rest_name, stem_x, y_of, Line};
 use crate::glyphs::{glyph, Weight};
 use crate::measure::Bar;
@@ -1066,6 +1066,16 @@ fn item_ink(ev: &Ev) -> (f64, f64) {
         if g.base > 1 {
             up = up.min(g.stem_end);
             down = down.max(g.stem_end);
+        }
+    }
+    // A whole note's tremolo, its strokes over or under its head: what
+    // goes there clears them — a dynamic was drawn through them (score #982).
+    if let Some(reach) = tremolo_reach(ev) {
+        let ys = ev.heads.iter().map(|hd| y_of(hd.pos));
+        if ev.up {
+            up = up.min(ys.fold(f64::INFINITY, f64::min) - reach);
+        } else {
+            down = down.max(ys.fold(f64::NEG_INFINITY, f64::max) + reach);
         }
     }
     (up, down)
