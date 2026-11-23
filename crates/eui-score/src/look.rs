@@ -801,8 +801,8 @@ fn switch(word: &str) -> Option<Vec<(&'static str, Option<Val>)>> {
     Some(match word {
         "numericTimeSignature" => vec![("TimeSignature.style", sym("numbered"))],
         "defaultTimeSignature" => vec![("TimeSignature.style", None)],
-        "xNotesOn" => vec![("NoteHead.style", sym("cross"))],
-        "xNotesOff" => vec![("NoteHead.style", None)],
+        "xNotesOn" | "deadNotesOn" => vec![("NoteHead.style", sym("cross"))],
+        "xNotesOff" | "deadNotesOff" => vec![("NoteHead.style", None)],
         "harmonicsOn" => vec![("NoteHead.style", sym("harmonic"))],
         "harmonicsOff" => vec![("NoteHead.style", None)],
         "RemoveEmptyStaves" => vec![("VerticalAxisGroup.remove-empty", Some(Val::Bool(true)))],

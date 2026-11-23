@@ -1,11 +1,13 @@
-//! Guitar chord diagrams, as LilyPond draws them: `\fret-diagram` and
+//! Chord diagrams, as LilyPond draws them: `\fret-diagram` and
 //! `\fret-diagram-terse` in markup, and a `FretBoards` line, whose shapes
-//! are found here for a guitar in standard tuning when no table gives them.
+//! are found here for its tuning (a guitar in standard tuning unless
+//! `stringTunings` says, score #1026) when no table gives them.
 //!
 //! A diagram travels in markup as a run whose text is [`FRET`] then its
-//! terse spec — `x;3;2;o;1;o;`, strings 6 to 1, and `|6-1-1` for a barre
-//! from string 6 to string 1 at the first fret — so it stands wherever
-//! words stand: over a note, in a line of chord names.
+//! terse spec — `x;3;2;o;1;o;`, its strings from the last (6 to 1 on a
+//! guitar, 4 to 1 on a ukulele), and `|6-1-1` for a barre from string 6 to
+//! string 1 at the first fret — so it stands wherever words stand: over a
+//! note, in a line of chord names.
 
 use crate::text::em;
 
@@ -13,14 +15,19 @@ use crate::text::em;
 pub const FRET: &str = "\u{1}fret:";
 
 /// The open strings of a guitar in standard tuning, low E first, as MIDI keys.
-const TUNING: [i64; 6] = [40, 45, 50, 55, 59, 64];
+pub const TUNING: [i64; 6] = [40, 45, 50, 55, 59, 64];
 
-/// A chord's shape: each string's fret, low E first — `None` not played,
-/// `Some(0)` open — and a barre `(from, to, fret)` in string numbers (6 to 1).
+/// The fewest and the most strings a diagram has.
+const STRINGS: std::ops::RangeInclusive<usize> = 3..=8;
+
+/// A chord's shape: each string's fret, the last string first — `None`
+/// not played, `Some(0)` open — and a barre `(from, to, fret)` in string
+/// numbers (6 to 1 on a guitar).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagram {
-    /// Each string's fret, low E first: none when it is not played, 0 open.
-    pub frets: [Option<i64>; 6],
+    /// Each string's fret, the last string first (6 on a guitar): none when it is not
+    /// played, 0 open. As many as the instrument has strings.
+    pub frets: Vec<Option<i64>>,
     /// A barre: from string, to string (6 to 1), at its fret.
     pub barre: Option<(i64, i64, i64)>,
 }
@@ -59,39 +66,63 @@ impl Diagram {
         let high = self.frets.iter().flatten().copied().max().unwrap_or(0);
         (high - self.base() + 1).max(4)
     }
+
+    /// Its strings.
+    pub fn strings(&self) -> usize {
+        self.frets.len()
+    }
+
+    /// The index in `frets` of string `s` (1 the highest).
+    fn index(&self, s: i64) -> usize {
+        (self.strings() as i64 - s) as usize
+    }
 }
 
 /// `\fret-diagram "6-x;5-3;4-2;3-o;2-1;1-o;"`: each string, `x` or `o` or its
 /// fret (a finger after a second `-` is read and not drawn); `c:6-1-1;` a
-/// barre. A string it does not name is not played.
+/// barre; `w:4;` first, a diagram of four strings (six unless it says). A
+/// string it does not name is not played.
 pub fn verbose(spec: &str) -> Result<Diagram, String> {
-    let mut d = Diagram { frets: [None; 6], barre: None };
-    for item in spec.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+    let items: Vec<&str> = spec.split(';').map(str::trim).filter(|s| !s.is_empty()).collect();
+    let mut n = 6usize;
+    for item in &items {
+        if let Some(w) = item.strip_prefix("w:") {
+            n = w.trim().parse().ok().filter(|w| STRINGS.contains(w)).ok_or_else(|| format!("'{item}': a diagram has 3 to 8 strings"))?;
+        }
+    }
+    let top = n as i64;
+    let mut d = Diagram { frets: vec![None; n], barre: None };
+    for item in items {
+        if item.starts_with("w:") {
+            continue;
+        }
         if let Some(barre) = item.strip_prefix("c:") {
-            let n: Vec<i64> = barre.split('-').map(|x| x.trim().parse::<i64>()).collect::<Result<_, _>>().map_err(|_| format!("'{item}' is not a barre (c:6-1-1)"))?;
-            let [a, b, f] = n[..] else { return Err(format!("'{item}' is not a barre (c:6-1-1)")) };
-            if !(1..=6).contains(&a) || !(1..=6).contains(&b) || !(1..=24).contains(&f) {
+            let k: Vec<i64> = barre.split('-').map(|x| x.trim().parse::<i64>()).collect::<Result<_, _>>().map_err(|_| format!("'{item}' is not a barre (c:6-1-1)"))?;
+            let [a, b, f] = k[..] else { return Err(format!("'{item}' is not a barre (c:6-1-1)")) };
+            if !(1..=top).contains(&a) || !(1..=top).contains(&b) || !(1..=24).contains(&f) {
                 return Err(format!("'{item}' is not a barre this draws"));
             }
             d.barre = Some((a.max(b), a.min(b), f));
             continue;
         }
         let mut parts = item.split('-');
-        let string: i64 = parts.next().and_then(|s| s.trim().parse().ok()).filter(|s| (1..=6).contains(s)).ok_or_else(|| format!("'{item}' names no string 1 to 6"))?;
+        let string: i64 = parts.next().and_then(|s| s.trim().parse().ok()).filter(|s| (1..=top).contains(s)).ok_or_else(|| format!("'{item}' names no string 1 to {top}"))?;
         let what = parts.next().map(str::trim).ok_or_else(|| format!("'{item}' says nothing of its string"))?;
-        d.frets[(6 - string) as usize] = fret_of(what).map_err(|_| format!("'{item}': x, o or a fret"))?;
+        let k = d.index(string);
+        d.frets[k] = fret_of(what).map_err(|_| format!("'{item}': x, o or a fret"))?;
     }
     barred(&mut d);
     Ok(d)
 }
 
-/// `\fret-diagram-terse "x;3;2;o;1;o;"`: the six strings, low E first.
+/// `\fret-diagram-terse "x;3;2;o;1;o;"`: each string, the last first — as
+/// many strings as it names, as LilyPond counts them.
 pub fn terse(spec: &str) -> Result<Diagram, String> {
     let items: Vec<&str> = spec.split(';').map(str::trim).filter(|s| !s.is_empty()).collect();
-    if items.len() != 6 {
-        return Err(format!("\"{spec}\" names {} strings; a guitar has 6", items.len()));
+    if !STRINGS.contains(&items.len()) {
+        return Err(format!("\"{spec}\" names {} strings; a diagram has 3 to 8, a guitar 6", items.len()));
     }
-    let mut d = Diagram { frets: [None; 6], barre: None };
+    let mut d = Diagram { frets: vec![None; items.len()], barre: None };
     for (k, item) in items.iter().enumerate() {
         // `3-2`: a finger after the fret; `1-(` a barre's start, read as its fret.
         let what = item.split('-').next().unwrap_or("");
@@ -112,8 +143,8 @@ fn fret_of(what: &str) -> Result<Option<i64>, ()> {
 fn barred(d: &mut Diagram) {
     if let Some((a, b, f)) = d.barre {
         for s in b..=a {
-            let k = (6 - s) as usize;
-            if d.frets[k].is_none_or(|x| x < f) {
+            let k = d.index(s);
+            if d.frets.get(k).copied().flatten().is_none_or(|x| x < f) {
                 d.frets[k] = Some(f);
             }
         }
@@ -134,18 +165,26 @@ pub fn from_spec(text: &str) -> Option<Diagram> {
     Some(d)
 }
 
-/// A shape for a chord's pitch classes on a guitar, its bass `bass` on the
-/// lowest string that sounds: the first position if one holds it, else the
-/// lowest position up the neck. All the chord's notes sound (a seventh
-/// chord's fifth may go), the hand spans three frets, four fingers or a
-/// barre and three; most strings, then the fewest fingers, then the lowest.
-pub fn voicing(classes: &[i64], bass: i64) -> Option<Diagram> {
+/// A shape for a chord's pitch classes on an instrument tuned `tuning`
+/// (its open strings as MIDI keys, the lowest first: [`TUNING`] for a
+/// guitar), its bass `bass` the lowest note it sounds (on an instrument of
+/// five strings or more tuned upward): the first
+/// position if one holds it, else the lowest position up the neck. All the
+/// chord's notes sound (a seventh chord's fifth may go) on four strings at
+/// least (each of an instrument of fewer), the hand spans three frets, four
+/// fingers or a barre and three; most strings, then the fewest fingers,
+/// then the lowest.
+pub fn voicing(classes: &[i64], bass: i64, tuning: &[i64]) -> Option<Diagram> {
+    let n = tuning.len();
+    if !STRINGS.contains(&n) {
+        return None;
+    }
     let classes: Vec<i64> = classes.iter().map(|c| c.rem_euclid(12)).collect();
     let bass = bass.rem_euclid(12);
     let fifth = (bass + 7) % 12;
     for base in 0..=12 {
         let window: Vec<i64> = if base == 0 { (0..=3).collect() } else { (base..base + 4).collect() };
-        let choices: Vec<Vec<Option<i64>>> = TUNING
+        let choices: Vec<Vec<Option<i64>>> = tuning
             .iter()
             .map(|open| {
                 let mut c: Vec<Option<i64>> = vec![None];
@@ -154,10 +193,10 @@ pub fn voicing(classes: &[i64], bass: i64) -> Option<Diagram> {
             })
             .collect();
         let mut best: Option<(i64, Diagram)> = None;
-        let mut pick = [0usize; 6];
+        let mut pick = vec![0usize; n];
         loop {
-            let frets: [Option<i64>; 6] = std::array::from_fn(|k| choices[k][pick[k]]);
-            if let Some(d) = playable(&frets, &classes, bass, fifth) {
+            let frets: Vec<Option<i64>> = (0..n).map(|k| choices[k][pick[k]]).collect();
+            if let Some(d) = playable(&frets, tuning, &classes, bass, fifth) {
                 let score = rank(&d);
                 if best.as_ref().is_none_or(|(s, _)| score < *s) {
                     best = Some((score, d));
@@ -165,7 +204,7 @@ pub fn voicing(classes: &[i64], bass: i64) -> Option<Diagram> {
             }
             // The next combination, odometer-wise.
             let mut k = 0;
-            while k < 6 {
+            while k < n {
                 pick[k] += 1;
                 if pick[k] < choices[k].len() {
                     break;
@@ -173,7 +212,7 @@ pub fn voicing(classes: &[i64], bass: i64) -> Option<Diagram> {
                 pick[k] = 0;
                 k += 1;
             }
-            if k == 6 {
+            if k == n {
                 break;
             }
         }
@@ -184,15 +223,22 @@ pub fn voicing(classes: &[i64], bass: i64) -> Option<Diagram> {
     None
 }
 
-fn playable(frets: &[Option<i64>; 6], classes: &[i64], bass: i64, fifth: i64) -> Option<Diagram> {
-    let sounding: Vec<usize> = (0..6).filter(|k| frets[*k].is_some()).collect();
+fn playable(frets: &[Option<i64>], tuning: &[i64], classes: &[i64], bass: i64, fifth: i64) -> Option<Diagram> {
+    let n = frets.len();
+    let sounding: Vec<usize> = (0..n).filter(|k| frets[*k].is_some()).collect();
     let (&low, &high) = (sounding.first()?, sounding.last()?);
     // At least four strings, together, the bass on the lowest, every note there.
-    if sounding.len() < 4 || high - low + 1 != sounding.len() {
+    if sounding.len() < n.min(4) || high - low + 1 != sounding.len() {
         return None;
     }
-    let pc = |k: usize| (TUNING[k] + frets[k].unwrap_or(0)) % 12;
-    if pc(low) != bass {
+    let pc = |k: usize| (tuning[k] + frets[k].unwrap_or(0)) % 12;
+    // The bass is the lowest note heard, on a guitar and its kin; a
+    // ukulele, a mandolin or a banjo — four strings, or a high string
+    // under the others — sounds the chord in any order, as LilyPond's
+    // tables for them have it.
+    let ordered = n >= 5 && tuning.windows(2).all(|w| w[0] < w[1]);
+    let deepest = sounding.iter().copied().min_by_key(|&k| tuning[k] + frets[k].unwrap_or(0))?;
+    if ordered && pc(deepest) != bass {
         return None;
     }
     let heard: Vec<i64> = sounding.iter().map(|k| pc(*k)).collect();
@@ -205,7 +251,7 @@ fn playable(frets: &[Option<i64>; 6], classes: &[i64], bass: i64, fifth: i64) ->
     if hi - lo > 3 {
         return None;
     }
-    let mut d = Diagram { frets: *frets, barre: None };
+    let mut d = Diagram { frets: frets.to_vec(), barre: None };
     if fretted.len() <= 4 {
         return Some(d);
     }
@@ -213,14 +259,14 @@ fn playable(frets: &[Option<i64>; 6], classes: &[i64], bass: i64, fifth: i64) ->
     // string, nothing open under it, and three fingers left.
     let under: Vec<usize> = sounding.iter().copied().filter(|k| frets[*k] == Some(lo)).collect();
     let from = *under.first()?;
-    if !(from..6).all(|k| frets[k].is_some_and(|f| f >= lo)) {
+    if !(from..n).all(|k| frets[k].is_some_and(|f| f >= lo)) {
         return None;
     }
-    let others = (from..6).filter(|k| frets[*k] != Some(lo)).count() + (low..from).count();
+    let others = (from..n).filter(|k| frets[*k] != Some(lo)).count() + (low..from).count();
     if others > 3 {
         return None;
     }
-    d.barre = Some((6 - from as i64, 1, lo));
+    d.barre = Some(((n - from) as i64, 1, lo));
     Some(d)
 }
 
@@ -260,7 +306,12 @@ fn metrics(d: &Diagram, e: f64) -> Metrics {
 /// A diagram's width and its height above the baseline it stands on.
 pub fn size(d: &Diagram, e: f64) -> (f64, f64) {
     let m = metrics(d, e);
-    (m.label + 5.0 * m.gap + 0.3 * m.s, m.top + d.rows() as f64 * m.fret + 0.1 * m.s)
+    (m.label + gaps(d) * m.gap + 0.3 * m.s, m.top + d.rows() as f64 * m.fret + 0.1 * m.s)
+}
+
+/// How many gaps lie between its strings.
+fn gaps(d: &Diagram) -> f64 {
+    d.strings().saturating_sub(1) as f64
 }
 
 /// A circle as fill commands: four quarters.
@@ -287,7 +338,7 @@ fn circle(cx: f64, cy: f64, r: f64, reverse: bool) -> Vec<f64> {
 }
 
 /// Where the diagram's strings and frets are, its top left corner at `(x, y)`:
-/// the low E string's x, the nut's y, the high E string's x, the last fret
+/// the lowest string's x, the nut's y, the highest string's x, the last fret
 /// line's y, the frets drawn and the fret the first row is — what an editor
 /// needs to tell which string and fret a click is on (score #436).
 pub fn grid(d: &Diagram, x: f64, y: f64, e: f64) -> (f64, f64, f64, f64, i64, i64) {
@@ -295,7 +346,7 @@ pub fn grid(d: &Diagram, x: f64, y: f64, e: f64) -> (f64, f64, f64, f64, i64, i6
     let rows = d.rows();
     let left = x + m.label + 0.15 * m.s;
     let nut_y = y + m.top;
-    (left, nut_y, left + 5.0 * m.gap, nut_y + rows as f64 * m.fret, rows, d.base())
+    (left, nut_y, left + gaps(d) * m.gap, nut_y + rows as f64 * m.fret, rows, d.base())
 }
 
 /// The diagram's shapes, its top left corner at `(x, y)`.
@@ -307,9 +358,10 @@ pub fn shapes(d: &Diagram, x: f64, y: f64, e: f64) -> Vec<Shape> {
     let nut_y = y + m.top;
     let line = 0.07 * m.s;
     let mut out = Vec::new();
-    let width = 5.0 * m.gap;
+    let width = gaps(d) * m.gap;
     let height = rows as f64 * m.fret;
-    for k in 0..6 {
+    let n = d.strings() as i64;
+    for k in 0..d.strings() {
         out.push(Shape::Rect(left + k as f64 * m.gap - line / 2.0, nut_y, line, height));
     }
     for r in 0..=rows {
@@ -340,10 +392,10 @@ pub fn shapes(d: &Diagram, x: f64, y: f64, e: f64) -> Vec<Shape> {
                 ring.extend(circle(cx, cy, 0.13 * m.s, true));
                 out.push(Shape::Fill(ring));
             }
-            Some(n) => {
-                let row = (n - base) as f64;
+            Some(fret) => {
+                let row = (fret - base) as f64;
                 let cy = nut_y + (row + 0.5) * m.fret;
-                if d.barre.is_some_and(|(_, _, bf)| bf == *n) && d.barre.is_some_and(|(a, b, _)| (b..=a).contains(&(6 - k as i64))) {
+                if d.barre.is_some_and(|(_, _, bf)| bf == *fret) && d.barre.is_some_and(|(a, b, _)| (b..=a).contains(&(n - k as i64))) {
                     continue;
                 }
                 out.push(Shape::Fill(circle(cx, cy, dot, false)));
@@ -351,7 +403,7 @@ pub fn shapes(d: &Diagram, x: f64, y: f64, e: f64) -> Vec<Shape> {
         }
     }
     if let Some((a, b, f)) = d.barre {
-        let (x0, x1) = (left + (6 - a) as f64 * m.gap, left + (6 - b) as f64 * m.gap);
+        let (x0, x1) = (left + (n - a) as f64 * m.gap, left + (n - b) as f64 * m.gap);
         let cy = nut_y + ((f - base) as f64 + 0.5) * m.fret;
         out.push(Shape::Rect(x0, cy - dot, x1 - x0, 2.0 * dot));
         out.push(Shape::Fill(circle(x0, cy, dot, false)));
@@ -366,7 +418,7 @@ mod tests {
     use super::*;
 
     fn shape(classes: &[i64]) -> String {
-        voicing(classes, classes[0]).map(|d| d.spec()).unwrap_or_default()
+        voicing(classes, classes[0], &TUNING).map(|d| d.spec()).unwrap_or_default()
     }
 
     #[test]
@@ -387,8 +439,8 @@ mod tests {
         let f = verbose("c:6-1-1;5-3;4-3;3-2;").unwrap();
         assert_eq!(f.spec(), "1;3;3;2;1;1;|6-1-1");
         assert_eq!(from_spec(&format!("{FRET}{}", f.spec())), Some(f));
-        assert!(terse("x;3;2;").unwrap_err().contains("a guitar has 6"));
-        assert!(verbose("7-1;").unwrap_err().contains("names no string"));
+        assert!(terse("x;3;").unwrap_err().contains("a guitar 6"));
+        assert!(verbose("7-1;").unwrap_err().contains("names no string 1 to 6"));
         assert!(verbose("6-y;").unwrap_err().contains("x, o or a fret"));
     }
 

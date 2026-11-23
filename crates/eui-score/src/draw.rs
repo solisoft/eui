@@ -924,7 +924,7 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         if tab {
             for ev in &bar.items {
                 let from_k = pen.paths.len();
-                draw_frets(&mut pen, ev, top);
+                draw_frets(&mut pen, ev, top, b == line.bars.start && ev.start == 0);
                 ranges.push((ev.i, from_k..pen.paths.len()));
             }
             let kind = bar.drawn();
@@ -1918,17 +1918,14 @@ fn draw_runs(pen: &mut Pen, runs: &[Run], mut x: f64, y: f64, e: f64) {
     }
 }
 
-/// A tablature's six strings, each broken where a fret is written on it.
+/// A tablature's strings, each broken where a fret is written on it.
 fn draw_strings(pen: &mut Pen, bars: &[Bar], line: &Line, top: f64) {
-    let e = crate::engrave::fret_em();
     let mut gaps: Vec<Vec<(f64, f64)>> = vec![Vec::new(); line.kind.strings().unwrap_or(6)];
     for b in line.bars.clone() {
         for ev in &bars[b].items {
-            let xc = ev.x + ev.head_w.unwrap_or(0.0) / 2.0;
-            for &(s, fret) in &ev.tab {
-                let w = text_width(&fret.to_string(), Weight::Bold, e);
+            for (fret_x, s, w) in tab_frets_placed(ev, b == line.bars.start && ev.start == 0) {
                 if let Some(g) = gaps.get_mut((s - 1) as usize) {
-                    g.push((xc - w / 2.0 - 0.15, xc + w / 2.0 + 0.15));
+                    g.push((fret_x - w / 2.0 - 0.15, fret_x + w / 2.0 + 0.15));
                 }
             }
         }
@@ -1949,16 +1946,47 @@ fn draw_strings(pen: &mut Pen, bars: &[Bar], line: &Line, top: f64) {
     }
 }
 
-/// A note's frets on its strings, centred where its head would be.
-fn draw_frets(pen: &mut Pen, ev: &Ev, top: f64) {
-    let e = crate::engrave::fret_em();
-    let xc = ev.x + ev.head_w.unwrap_or(0.0) / 2.0;
-    for &(s, fret) in &ev.tab {
-        let text = fret.to_string();
+/// Each fret a tablature's note draws, its grace notes' first: where its
+/// middle is, its string and its width.
+fn tab_frets_placed(ev: &Ev, line_start: bool) -> Vec<(f64, i64, f64)> {
+    let mut out = Vec::new();
+    let mut add = |n: &Ev, x: f64, e: f64, start: bool| {
+        for (k, &(s, _)) in n.tab.iter().enumerate() {
+            if let Some(label) = crate::engrave::tab_label(n, k, start) {
+                out.push((x, s, crate::engrave::tab_label_width(&label, e)));
+            }
+        }
+    };
+    for g in &ev.graces {
+        add(g, ev.x + g.x, crate::engrave::grace_fret_em(), false);
+    }
+    add(ev, ev.x + ev.head_w.unwrap_or(0.0) / 2.0, crate::engrave::fret_em(), line_start);
+    out
+}
+
+/// A note's frets on its strings, centred where its head would be, its
+/// grace notes' small before them (score #1026).
+fn draw_frets(pen: &mut Pen, ev: &Ev, top: f64, line_start: bool) {
+    for g in &ev.graces {
+        draw_fret_labels(pen, g, ev.x + g.x, top, crate::engrave::grace_fret_em(), false);
+    }
+    draw_fret_labels(pen, ev, ev.x + ev.head_w.unwrap_or(0.0) / 2.0, top, crate::engrave::fret_em(), line_start);
+}
+
+/// `ev`'s frets centred on `xc`, at size `e`: a dead note's as a cross.
+fn draw_fret_labels(pen: &mut Pen, ev: &Ev, xc: f64, top: f64, e: f64, line_start: bool) {
+    for (k, &(s, _)) in ev.tab.iter().enumerate() {
+        let Some(text) = crate::engrave::tab_label(ev, k, line_start) else { continue };
+        let y_string = top + (s - 1) as f64 * 1.5;
+        if ev.tab_marks.get(k) == Some(&crate::parse::TabMark::Dead) {
+            let g = glyph("noteheadXBlack");
+            let kx = e / crate::engrave::fret_em();
+            pen.glyph_k("noteheadXBlack", xc - g.advance * kx / 2.0, y_string, kx);
+            continue;
+        }
         let w = text_width(&text, Weight::Bold, e);
         let (t, b) = text_box(&text, Weight::Bold, e);
-        let y = top + (s - 1) as f64 * 1.5 - (t + b) / 2.0;
-        pen.text(&text, Weight::Bold, xc - w / 2.0, y, e);
+        pen.text(&text, Weight::Bold, xc - w / 2.0, y_string - (t + b) / 2.0, e);
     }
 }
 

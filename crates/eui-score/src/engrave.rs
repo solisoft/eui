@@ -11,7 +11,7 @@ use crate::breaking::{line_starts, Opts, Widths};
 use crate::glyphs::{glyph, Weight};
 use crate::marks::{self, curves, reach, DynEl, HairpinPiece, MarkPlace, OttavaPlace, ScriptPlace, SpanPlace, TempoMark, TextPlace, TupletPlace, Volta};
 use crate::measure::{measures, measures_keeping, Bar, Beam, Changes, Opening};
-use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Sign, StaffKind, Syllable, Tempo, GUITAR};
+use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Sign, StaffKind, Syllable, TabMark, Tempo, GUITAR};
 use crate::text::{em, header_lines, text_width, HeadBlock};
 use crate::vertical::{Skyline, Spec, Spring};
 use crate::{Layout, ScoreError, RULE, WHOLE};
@@ -161,12 +161,16 @@ pub(crate) fn fret_em() -> f64 {
 /// Each head of a tablature's note on a string, with its fret: the string
 /// written (`\\5`), or the highest string the note reaches with a fret
 /// of 0 or more not taken by another head of the chord, the highest note
-/// first.
-pub(crate) fn tab_frets(ev: &mut Ev, tuning: &[i64]) {
+/// first. And how each fret is drawn (score #1026): a cross for a dead
+/// note, angle brackets for a harmonic, nothing for a head that `tied`
+/// (the keys a tie from the note before reaches) holds on.
+pub(crate) fn tab_frets(ev: &mut Ev, tuning: &[i64], tied: &[i64]) {
     let tuning = if tuning.is_empty() { &GUITAR[..] } else { tuning };
     let open = |s: i64| tuning.get((s - 1) as usize).copied();
+    let style = ev.look.sym("NoteHead.style").map(str::to_owned);
     let mut used: Vec<i64> = Vec::new();
     let mut out = Vec::new();
+    let mut marks = Vec::new();
     for h in ev.heads.iter().rev() {
         let key = crate::parse::semitones(h.d, h.alter) + 48;
         // A string that cannot sound the note is not the one it is played on.
@@ -175,8 +179,72 @@ pub(crate) fn tab_frets(ev: &mut Ev, tuning: &[i64]) {
         let Some(s) = string else { continue };
         used.push(s);
         out.push((s, key - open(s).unwrap_or(key)));
+        marks.push(if tied.contains(&key) {
+            TabMark::Tied
+        } else if style.as_deref() == Some("cross") {
+            TabMark::Dead
+        } else if ev.harmonics.contains(&h.d) || style.as_deref().is_some_and(|s| s.starts_with("harmonic")) {
+            TabMark::Harmonic
+        } else {
+            TabMark::Fret
+        });
     }
     ev.tab = out;
+    ev.tab_marks = marks;
+}
+
+/// What a tablature's `k`th fret of `ev` is drawn as, LilyPond's
+/// `TabNoteHead`: its number; `X` for a dead note (drawn as the cross
+/// head); `<12>` for a harmonic; for a tied note nothing, or `(12)` when
+/// it starts a line (`line_start`).
+pub fn tab_label(ev: &Ev, k: usize, line_start: bool) -> Option<String> {
+    let &(_, fret) = ev.tab.get(k)?;
+    match ev.tab_marks.get(k).copied().unwrap_or_default() {
+        TabMark::Fret => Some(fret.to_string()),
+        TabMark::Dead => Some("X".to_string()),
+        TabMark::Harmonic => Some(format!("<{fret}>")),
+        TabMark::Tied => line_start.then(|| format!("({fret})")),
+    }
+}
+
+/// How wide a fret is drawn at size `e`.
+pub(crate) fn tab_label_width(label: &str, e: f64) -> f64 {
+    if label == "X" {
+        glyph("noteheadXBlack").advance * e / fret_em()
+    } else {
+        text_width(label, Weight::Bold, e)
+    }
+}
+
+/// The size of a grace note's frets: LilyPond's `TabNoteHead.font-size`
+/// -4 under `graceSettings`, against its -2.
+pub(crate) fn grace_fret_em() -> f64 {
+    em(-4.0)
+}
+
+/// A tablature note's grace notes, each its frets small, left of the note
+/// and apart from one another as their widest fret; the note's room on the
+/// left grows by them.
+fn tab_graces(ev: &mut Ev, tuning: &[i64]) {
+    if ev.graces.is_empty() {
+        return;
+    }
+    let e = grace_fret_em();
+    let mut widths = Vec::with_capacity(ev.graces.len());
+    for g in &mut ev.graces {
+        tab_frets(g, tuning, &[]);
+        widths.push((0..g.tab.len()).filter_map(|k| tab_label(g, k, false)).map(|l| tab_label_width(&l, e)).fold(0.3, f64::max));
+    }
+    let gap = 0.45;
+    let mut x = -ev.left - gap;
+    for (g, w) in ev.graces.iter_mut().zip(widths).rev() {
+        // `x` is where its fret's right edge goes; its centre is drawn on
+        // the head's middle, so the head starts half a head left of that.
+        g.head_w = Some(0.0);
+        g.x = x - w / 2.0;
+        x -= w + gap;
+    }
+    ev.left = -x - gap + 0.1;
 }
 
 /// A system: one line, or one line of each staff.
@@ -804,6 +872,8 @@ fn after_layout(ev: &mut Ev) {
 }
 
 fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind, tuning: &[i64]) {
+    // On a tablature, each voice's keys a tie from its last note holds on.
+    let mut held: HashMap<Option<u8>, Vec<i64>> = HashMap::new();
     for bar in bars.iter_mut() {
         for ev in &mut bar.items {
             let t = space_ticks(ev);
@@ -824,13 +894,23 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind, tuning: &[i64]) {
                 continue;
             }
             if kind.strings().is_some() && ev.k == Kind::Note {
-                tab_frets(ev, tuning);
+                let keys = |ev: &Ev| ev.heads.iter().map(|h| crate::parse::semitones(h.d, h.alter) + 48).collect::<Vec<i64>>();
+                let tied = held.remove(&ev.voice).unwrap_or_default();
+                tab_frets(ev, tuning, &tied);
+                if ev.tie {
+                    held.insert(ev.voice, keys(ev));
+                }
                 let hw = glyph("noteheadBlack").advance;
-                let w = ev.tab.iter().map(|t| text_width(&t.1.to_string(), Weight::Bold, fret_em())).fold(0.0, f64::max);
+                // A tied fret's room is its parentheses', for where a line starts with it.
+                let w = (0..ev.tab.len()).filter_map(|k| tab_label(ev, k, true)).map(|l| tab_label_width(&l, fret_em())).fold(0.0, f64::max);
                 ev.head_w = Some(hw);
                 ev.left = (w - hw).max(0.0) / 2.0 + 0.2;
                 ev.right = hw + (w - hw).max(0.0) / 2.0 + 0.2;
+                tab_graces(ev, tuning);
                 continue;
+            }
+            if kind.strings().is_some() && ev.k == Kind::Rest && !ev.spacer {
+                held.remove(&ev.voice);
             }
             if kind.strings().is_some() {
                 ev.left = 0.0;

@@ -1197,6 +1197,19 @@ version 7) and a margin.
   (`a_curve_says_the_note_it_starts_on`), a hairpin, a dynamic, an
   articulation, a fingering and a word their note and their box
   (`marks_say_their_box_and_the_note_they_are_written_on`).
+- **A tablature's frets are drawn as LilyPond draws them** (03 §1.4;
+  score #1026), in `crates/eui-score/tests/tablature.rs`: a grace note's
+  small, before its note's, which makes room for them
+  (`grace_notes_have_their_small_frets_before_the_note`); a dead note a
+  cross (`a_dead_note_is_a_cross_on_its_string`); a tied note's fret
+  hidden, in parentheses where a line starts with it, the tied head of a
+  chord alone (`a_tied_note_s_fret_is_hidden_unless_a_line_starts_with_it`);
+  a harmonic's between angle brackets
+  (`a_harmonic_s_fret_stands_between_angle_brackets`); a seventh string
+  named on a seven-string guitar and passed over on a guitar
+  (`string_numbers_past_six_name_the_strings_a_tuning_has`); a ukulele's
+  chords shaped on its four strings, a diagram of four drawn narrower
+  (`fret_boards_and_diagrams_have_the_strings_their_tuning_has`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11

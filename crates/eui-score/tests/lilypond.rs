@@ -585,8 +585,8 @@ fn fret_boards_and_fret_diagrams_draw_a_guitars_chords() {
     let words = &p.staves[0].events.iter().find(|e| e.k == Kind::Note).unwrap().texts[0].runs[0].text;
     assert_eq!(from_spec(words).unwrap().spec(), "x;3;2;o;1;o;");
     assert!(engrave("{ c''1^\\markup \\fret-diagram-terse \"x;x;7;9;10;9;\" }", 900.0 / 8.0, &Layout::default()).is_ok());
-    let refused = parse("{ c''1^\\markup \\fret-diagram-terse \"x;3;2;\" }").unwrap_err().message;
-    assert!(refused.contains("a guitar has 6"), "{refused}");
+    let refused = parse("{ c''1^\\markup \\fret-diagram-terse \"x;3;\" }").unwrap_err().message;
+    assert!(refused.contains("a diagram has 3 to 8, a guitar 6"), "{refused}");
 }
 
 #[test]

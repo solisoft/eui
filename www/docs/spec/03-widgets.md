@@ -609,6 +609,19 @@ construct as LilyPond 2.25 draws it:
   10), `\new TabStaff` (standard tuning, each note on the highest string
   that reaches it, `\5` naming one — passed over when the note is below
   that string — and circled over the note on a staff; frets, no rhythm).
+  A tablature's frets are drawn as LilyPond's `TabNoteHead` draws them
+  (score #1026): a grace note's smaller, before its note's; a dead note
+  (`\deadNote`, `\xNote`, `\deadNotesOn`) a cross on its string; a
+  harmonic (`\harmonic`, `\harmonicNote`, `\harmonicsOn`) its fret in
+  angle brackets, `<12>`; a note a tie reaches nothing, unless a line
+  starts with it, in parentheses, `(5)` — the default
+  `TabNoteHead.details.tied-properties`. Strings are numbered 1 to 8
+  (`\7` on a seven-string guitar); a number the tuning has no string for
+  puts the note where it is played. `\new FretBoards \with { stringTunings
+  = … }` shapes each chord on that instrument's strings — the lowest note
+  the bass on one of five strings or more tuned upward, in any order on a
+  ukulele, a mandolin or a banjo — and `\fret-diagram "w:4;…"` and a
+  `\fret-diagram-terse` spec of three to eight strings draw that many.
 - *Files as they are written* (score #1031, #1032): a context named by a
   bare word (`\context Voice = V`); a `\new Voice` holding its own
   `\new Lyrics`, which makes its staff; a variable in a lyric block's

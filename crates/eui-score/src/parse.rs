@@ -1328,6 +1328,9 @@ pub struct Ev {
     /// On a tablature, each head's `(string, fret)`, the first string the
     /// highest.
     pub tab: Vec<(i64, i64)>,
+    /// How each of `tab` is drawn: its fret, a dead note's cross, a
+    /// harmonic's fret in angle brackets, a tied note's hidden (score #1026).
+    pub tab_marks: Vec<TabMark>,
     // -- placed
     /// Ticks from its bar's start.
     pub start: i64,
@@ -1418,6 +1421,22 @@ pub struct Ev {
     /// The first note of a stretch `\partCombine` says something over:
     /// which of its texts, worded as the context sets it (score #1021).
     pub part_text: Option<crate::look::PartText>,
+}
+
+/// How a fret of a tablature is drawn, as LilyPond's `TabNoteHead` draws
+/// it (score #1026).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TabMark {
+    /// Its number.
+    #[default]
+    Fret,
+    /// `\deadNote`, `\xNote`: a cross on the string.
+    Dead,
+    /// `\harmonic`, `\harmonicNote`: `<12>`.
+    Harmonic,
+    /// Reached by a tie: not drawn, but in parentheses where a line
+    /// starts with it — `TabNoteHead.details.tied-properties`.
+    Tied,
 }
 
 /// A syllable of `\addlyrics`.
@@ -1535,7 +1554,10 @@ pub fn tuning_named(name: &str) -> Option<&'static [i64]> {
 }
 
 /// The fewest and the most strings a tablature is drawn with.
-const TAB_STRINGS: std::ops::RangeInclusive<usize> = 3..=8;
+const TAB_STRINGS: std::ops::RangeInclusive<usize> = 3..=TAB_MOST as usize;
+
+/// The most strings a tablature has, and the highest string number read.
+const TAB_MOST: i64 = 8;
 
 /// `stringTunings = #bass-tuning` or `= \stringTuning <e,, a,, d, g,>` at
 /// `i` in a `\with` (score #1032): the tablature's strings. A tuning this
@@ -2284,7 +2306,7 @@ fn pedal_words(ev: &mut Ev, cc: u8, run: Run) {
 }
 
 /// The commands that only switch a layout setting on or off, passed over.
-const SWITCHES: [&str; 96] = [
+const SWITCHES: [&str; 98] = [
     "slurUp",
     "slurDown",
     "slurNeutral",
@@ -2353,6 +2375,8 @@ const SWITCHES: [&str; 96] = [
     "improvisationOff",
     "xNotesOn",
     "xNotesOff",
+    "deadNotesOn",
+    "deadNotesOff",
     "germanChords",
     "semiGermanChords",
     "italianChords",
@@ -3750,13 +3774,16 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         staves.push(Staff { kind: StaffKind::Ossia, events, props: st.ossia_props.take().unwrap_or_default(), lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: Vec::new(), name: None });
     }
     if kind == StaffKind::FretBoards {
-        // Each chord's shape on the guitar, its lowest note the bass; a rest shows none.
+        // Each chord's shape on the guitar, or on the strings
+        // `stringTunings` gives (score #1026), its lowest note the bass; a
+        // rest shows none.
+        let tuning: Vec<i64> = if st.props.string_tunings.is_empty() { crate::frets::TUNING.to_vec() } else { st.props.string_tunings.iter().rev().copied().collect() };
         for ev in &mut st.events {
             ev.chord_name = match (ev.k == Kind::Note, ev.pitches.first()) {
                 (true, Some(bass)) => {
                     let pc = |p: &Pitch| crate::midi::key_of(p.d, p.alter);
                     let classes: Vec<i64> = ev.pitches.iter().map(pc).collect();
-                    crate::frets::voicing(&classes, pc(bass)).map(|d| vec![Run::words(format!("{}{}", crate::frets::FRET, d.spec()), Weight::Regular)]).unwrap_or_default()
+                    crate::frets::voicing(&classes, pc(bass), &tuning).map(|d| vec![Run::words(format!("{}{}", crate::frets::FRET, d.spec()), Weight::Regular)]).unwrap_or_default()
                 }
                 _ => Vec::new(),
             };
@@ -5258,8 +5285,10 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
     if word.chars().all(|c| c.is_ascii_digit()) {
         let n: i64 = word.parse().unwrap_or(0);
         let last = last_note(&mut st.events, &tk)?;
-        if !(1..=6).contains(&n) {
-            return refuse("a string is 1 to 6", tk.at);
+        // A seven-string guitar's `\7`: a tablature whose tuning has no
+        // such string puts the note where it is played (`tab_frets`).
+        if !(1..=TAB_MOST).contains(&n) {
+            return refuse(format!("a string is 1 to {TAB_MOST}"), tk.at);
         }
         for p in last.pitches.clone() {
             last.strings.push((p.d, n));

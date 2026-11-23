@@ -24,6 +24,18 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- A tablature draws the details LilyPond draws (score #1026): grace notes'
+  frets small before the note's, a dead note (`\deadNote`, `\xNote`,
+  `\deadNotesOn`) as a cross on its string, a harmonic's fret between
+  angle brackets (`<12>`), and a note reached by a tie with no fret —
+  in parentheses where a line starts with it, as LilyPond's default has
+  it. Strings are numbered up to 8 (`c\7` on a seven-string guitar; a
+  string number above 6 was refused). `\new FretBoards \with
+  { stringTunings = #ukulele-tuning }` shapes its chords on the
+  ukulele's four strings, and `\fret-diagram "w:4;…"` or a four-item
+  `\fret-diagram-terse` draws a diagram of four strings; a guitar's six
+  were the only ones.
+
 - `\shape` is drawn (score #1019): `\shape #'((dx1 . dy1) (dx2 . dy2)
   (dx3 . dy3) (dx4 . dy4)) Slur` before the note a curve starts on, or
   `-\shape #'(…) (` before the curve itself, moves the four control points
