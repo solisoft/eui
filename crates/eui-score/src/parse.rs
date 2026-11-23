@@ -380,7 +380,10 @@ pub(crate) fn tokens(src: &str) -> Result<Vec<Tok>, ScoreError> {
                     i = jj + 1;
                     k = skip_blank(&cs, i);
                 }
-                if k < n && cs[k] == '{' {
+                if k < n && cs[k] == '{' && lyrics_variable(&cs, k) {
+                    // `\lyricsto "V" { \words }`: the block holds a variable,
+                    // read where it is written out.
+                } else if k < n && cs[k] == '{' {
                     let (items, next) = lyric_tokens(&cs, k, at)?;
                     out.push(Tok { t: T::Lyrics, v: String::new(), marks: 0, at, lyrics: items });
                     i = next;
@@ -430,6 +433,38 @@ pub(crate) fn tokens(src: &str) -> Result<Vec<Tok>, ScoreError> {
         }
     }
     Ok(out)
+}
+
+/// Whether the `{` at `i` holds one variable and nothing else, `{ \words }`:
+/// lyrics written out from their definition, not words themselves.
+fn lyrics_variable(cs: &[char], i: usize) -> bool {
+    let k = skip_blank(cs, i + 1);
+    if cs.get(k) != Some(&'\\') {
+        return false;
+    }
+    let (word, after) = name_at(cs, k + 1, letter);
+    let known = ["skip", "set", "override", "revert", "once", "tweak", "markup", "unset", "repeat"].contains(&word.as_str());
+    !word.is_empty() && !known && cs.get(skip_blank(cs, after)) == Some(&'}')
+}
+
+/// The lyrics at `i`, `\lyricmode { … }` or the block alone, in braces of
+/// their own or not (`{ \words }` written out): the token that holds them
+/// and the one after them all. None when `i` starts no lyrics.
+fn lyrics_at(toks: &[Tok], mut i: usize) -> Option<(usize, usize)> {
+    let braced = is(toks, i, T::Sym('{'));
+    if braced {
+        i += 1;
+    }
+    if is_cmd(toks, i, "lyricmode") || is_cmd(toks, i, "lyrics") {
+        i += 1;
+    }
+    if !is(toks, i, T::Lyrics) {
+        return None;
+    }
+    if braced && !is(toks, i + 1, T::Sym('}')) {
+        return None;
+    }
+    Some((i, if braced { i + 2 } else { i + 1 }))
 }
 
 /// A lyric block from its `{`, read as LilyPond reads lyrics: words split
@@ -648,16 +683,12 @@ fn attach_lyrics(toks: &[Tok], mut i: usize, staves: &mut [Staff]) -> Result<usi
         let Some(last) = staves.last_mut() else {
             return refuse("\\addlyrics follows a staff's music", at);
         };
-        let mut j = i + 1;
-        if is_cmd(toks, j, "lyricmode") {
-            j += 1;
-        }
-        if !is(toks, j, T::Lyrics) {
+        let Some((j, after)) = lyrics_at(toks, i + 1) else {
             return refuse("\\addlyrics wants a { block } of words", at);
-        }
+        };
         let words = syllables(&toks[j].lyrics, at)?;
         add_verse(last, words, 1, at)?;
-        i = j + 1;
+        i = after;
     }
     Ok(i)
 }
@@ -1410,6 +1441,13 @@ pub struct Props {
     pub midi_maximum_volume: Option<f64>,
     /// `midiPanPosition`, -1–1.
     pub midi_pan_position: Option<f64>,
+    /// `stringTunings`: a tablature's open strings as MIDI keys, the first
+    /// string first; empty for a guitar's ([`GUITAR`]).
+    pub string_tunings: Vec<i64>,
+    /// `\transposition`: the semitones the staff sounds from where it is
+    /// written — -12 for `\transposition c`, -2 for a B flat clarinet's
+    /// `\transposition bes`.
+    pub transposition: i64,
     /// The layout settings its `\with` honours: `\override`, `\set`,
     /// `\RemoveEmptyStaves` …
     pub look: crate::look::Map,
@@ -1437,9 +1475,98 @@ pub enum StaffKind {
     Drums,
     /// `\new TabStaff`: a guitar's six strings, and frets on them.
     Tab,
+    /// A tablature of so many strings, not six (score #1032): a bass's four
+    /// (`stringTunings = #bass-tuning`), a seven-string guitar's; the
+    /// strings themselves are its [`Props::string_tunings`].
+    TabStrings(u8),
     /// `\new RhythmicStaff` (score #1026): one line, every note on it — its
     /// rhythm drawn, its pitch not — and no clef nor key; played as written.
     Rhythmic,
+}
+
+impl StaffKind {
+    /// A tablature's strings: six, or as many as its tuning has; none for
+    /// any other staff.
+    pub fn strings(self) -> Option<usize> {
+        match self {
+            StaffKind::Tab => Some(6),
+            StaffKind::TabStrings(n) => Some(n as usize),
+            _ => None,
+        }
+    }
+}
+
+/// LilyPond's tunings by name (`stringTunings = #bass-tuning`): the open
+/// strings as MIDI keys, the first string first.
+pub fn tuning_named(name: &str) -> Option<&'static [i64]> {
+    Some(match name {
+        "guitar-tuning" => &GUITAR,
+        "guitar-seven-string-tuning" => &[64, 59, 55, 50, 45, 40, 35],
+        "guitar-drop-d-tuning" => &[64, 59, 55, 50, 45, 38],
+        "guitar-drop-c-tuning" => &[62, 57, 53, 48, 43, 36],
+        "guitar-open-g-tuning" => &[62, 59, 55, 50, 43, 38],
+        "guitar-open-d-tuning" => &[62, 57, 54, 50, 45, 38],
+        "guitar-dadgad-tuning" => &[62, 57, 55, 50, 45, 38],
+        "guitar-lute-tuning" => &[64, 59, 54, 50, 45, 40],
+        "guitar-asus4-tuning" => &[64, 57, 52, 50, 45, 40],
+        "bass-tuning" | "bass-four-string-tuning" | "double-bass-tuning" => &[43, 38, 33, 28],
+        "bass-drop-d-tuning" => &[43, 38, 33, 26],
+        "bass-five-string-tuning" => &[43, 38, 33, 28, 23],
+        "bass-six-string-tuning" => &[48, 43, 38, 33, 28, 23],
+        "mandolin-tuning" | "violin-tuning" => &[76, 69, 62, 55],
+        "viola-tuning" => &[69, 62, 55, 48],
+        "cello-tuning" => &[57, 50, 43, 36],
+        "ukulele-tuning" => &[69, 64, 60, 67],
+        "ukulele-d-tuning" => &[71, 66, 62, 69],
+        "tenor-ukulele-tuning" => &[69, 64, 60, 55],
+        "baritone-ukulele-tuning" => &[64, 59, 55, 50],
+        "banjo-open-g-tuning" => &[62, 59, 55, 50, 67],
+        "banjo-c-tuning" => &[62, 59, 55, 48, 67],
+        "banjo-modal-tuning" => &[62, 60, 55, 50, 67],
+        "banjo-open-d-tuning" => &[62, 57, 54, 50, 69],
+        "banjo-open-dm-tuning" => &[62, 57, 53, 50, 69],
+        _ => return None,
+    })
+}
+
+/// The fewest and the most strings a tablature is drawn with.
+const TAB_STRINGS: std::ops::RangeInclusive<usize> = 3..=8;
+
+/// `stringTunings = #bass-tuning` or `= \stringTuning <e,, a,, d, g,>` at
+/// `i` in a `\with` (score #1032): the tablature's strings. A tuning this
+/// does not know leaves the guitar's, with a warning.
+fn string_tunings(toks: &[Tok], i: usize, props: &mut Props) -> Result<usize, ScoreError> {
+    let at = toks[i].at;
+    let j = i + 2;
+    beyond();
+    if is_cmd(toks, j, "stringTuning") && is(toks, j + 1, T::Sym('<')) {
+        // The chord's notes, absolute, from the lowest string to the first.
+        let mut k = j + 2;
+        let mut keys = Vec::new();
+        while let Some(t) = toks.get(k).filter(|t| t.t == T::Word) {
+            let named = pitch_name_in(Lang::default(), &t.v).or_else(|| pitch_name_in(Lang::English, &t.v));
+            let Some((step, alter)) = named else { return refuse(format!("'{}' is not a note name", t.v), t.at) };
+            keys.push(crate::midi::key_of(step + 7 * t.marks, alter));
+            k += 1;
+        }
+        if !is(toks, k, T::Sym('>')) {
+            return refuse("\\stringTuning wants its strings as a chord, <e, a, d g b e'>", at);
+        }
+        keys.reverse();
+        if TAB_STRINGS.contains(&keys.len()) {
+            props.string_tunings = keys;
+        } else {
+            warn(format!("a tablature of {} strings is not drawn: a guitar's six are", keys.len()), at);
+        }
+        return Ok(k + 1);
+    }
+    let end = value_end(toks, j)?;
+    let name: String = toks[j..end].iter().filter(|t| !matches!(t.t, T::Sym('#' | '\''))).map(|t| t.v.as_str()).collect();
+    match tuning_named(&name) {
+        Some(keys) => props.string_tunings = keys.to_vec(),
+        None => warn(format!("stringTunings = #{name} is not a tuning this knows: the tablature is a guitar's"), at),
+    }
+    Ok(end)
 }
 
 /// How a note's words are read: `\chordmode`, `\drummode`, or as notes.
@@ -1651,6 +1778,10 @@ pub struct PaperSpec {
     /// `\time` and `\partial`. Otherwise they are the score's, as
     /// LilyPond's, whatever staff writes them (score #408).
     pub polymeter: bool,
+    /// `\midi { \tempo 4 = 100 }`: the speed the source is played at where
+    /// its music writes no `\tempo` — beats a minute, and the beat's note
+    /// value (score #1032).
+    pub midi_tempo: Option<(i64, i64)>,
 }
 
 /// A flexible vertical distance, LilyPond's spacing alist: in staff spaces,
@@ -1816,6 +1947,9 @@ struct St {
     tuplet_outer: Option<TupletState>,
     /// The pitches of the last chord, which `q` repeats.
     chord: Option<Vec<Pitch>>,
+    /// The pitches of the last note or chord, which a duration written
+    /// alone repeats (`c4~ 8`), a rest between them or not.
+    again: Option<Vec<Pitch>>,
     /// `\voiceOne` … `\voiceFour` in the music being read: 1 or 2.
     voice_cmd: Option<u8>,
     /// `\new Voice = "name"` around the music being read.
@@ -1995,6 +2129,7 @@ fn expr_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
             }
             "chordmode" | "drummode" | "notemode" | "lyricmode" | "chords" | "drums" | "lyrics" | "sequential" | "simultaneous" => expr_end(toks, i + 1),
             "lyricsto" => expr_end(toks, i + 2),
+            "stringTuning" if is(toks, i + 1, T::Sym('<')) => balanced(toks, i + 1, '<', '>'),
             "repeat" => {
                 let j = expr_end(toks, i + 3)?;
                 if is_cmd(toks, j, "alternative") {
@@ -2224,6 +2359,10 @@ const SWITCHES: [&str; 96] = [
     "predefinedFretboardsOff",
 ];
 
+/// More of them, read from files found in the wild (score #1031, #1032):
+/// `\stopStaff` and `\startStaff` (the staff's lines are drawn throughout).
+const MORE_SWITCHES: [&str; 2] = ["stopStaff", "startStaff"];
+
 /// Where a property path ends: `Staff.TimeSignature.stencil`, `Stem
 /// #'direction`, `#'color`, `TextSpanner.bound-details.left.text`.
 pub(crate) fn path_end(toks: &[Tok], i: usize) -> usize {
@@ -2341,7 +2480,7 @@ fn skip_setting(toks: &[Tok], i: usize, what: &str) -> Result<Option<usize>, Sco
             warn(format!("\\{}{what} is not read", t.v), t.at);
             value_end(toks, i + 1)?
         }
-        (T::Cmd, w) if SWITCHES.contains(&w) => {
+        (T::Cmd, w) if SWITCHES.contains(&w) || MORE_SWITCHES.contains(&w) => {
             warn(format!("\\{w}{what} is not drawn"), t.at);
             i + 1
         }
@@ -2509,16 +2648,36 @@ fn score(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<(Vec<Staff>, Vec<G
         }
         i += 1;
     }
+    even_out(&mut staves);
     for p in std::mem::take(&mut st.pending) {
         let found = staves.iter().position(|s| s.voices.iter().any(|v| v.0 == p.voice));
         let Some(si) = found else {
-            return refuse(format!("\\lyricsto \"{}\" names no voice: a \\new Voice = \"{}\" is what it sings to", p.voice, p.voice), p.at);
+            // As LilyPond: the words are left out, and the music stays.
+            warn(format!("\\lyricsto \"{}\" names no voice, and its words are not set: a \\new Voice = \"{}\" is what it sings to", p.voice, p.voice), p.at);
+            continue;
         };
         let staff = &mut staves[si];
         let voice = staff.voices.iter().find(|v| v.0 == p.voice).map_or(1, |v| v.1);
         add_verse(staff, p.syllables, voice, p.at)?;
     }
     Ok((staves, groups, i))
+}
+
+/// The staves of a score, each as long as the longest: one that stops
+/// before the others — chord names a bar short of the melody's last one —
+/// goes on in silence, as LilyPond leaves it (score #1032).
+fn even_out(staves: &mut [Staff]) {
+    let whole = |s: &Staff| s.kind != StaffKind::Ossia;
+    let longest = staves.iter().filter(|s| whole(s)).map(|s| elapsed(&s.events)).max().unwrap_or(0);
+    for stf in staves.iter_mut().filter(|s| whole(s)) {
+        let short = longest - elapsed(&stf.events);
+        if short > 0 {
+            beyond();
+            let at = stf.events.last().map_or(0, |e| e.at);
+            // One spacer for all of it, as `s1*16` is: cut at the bar lines when the bars are.
+            stf.events.push(Ev { k: Kind::Rest, spacer: true, base: 1, ticks: short, at, i: usize::MAX, ..Ev::default() });
+        }
+    }
 }
 
 /// What a file says before and after its music: `\version`, `\header`,
@@ -2825,10 +2984,40 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
 
 /// `\\layout { … }` or `\\midi { … }` at `i`: passed over, with a warning
 /// when it says anything.
+/// `\tempo 4 = 100` among the tokens `from..to` of a `\midi` block: beats a
+/// minute and the beat's note value (a dotted beat as half as many again
+/// of the plain one), and the token after it.
+fn midi_tempo(toks: &[Tok], from: usize, to: usize) -> Option<((i64, i64), usize)> {
+    let at = (from..to).find(|&k| is_cmd(toks, k, "tempo"))?;
+    let mut j = at + 1;
+    let beat: i64 = toks.get(j).filter(|t| t.t == T::Num).and_then(|t| t.v.parse().ok()).filter(|b| [1, 2, 4, 8, 16].contains(b))?;
+    j += 1;
+    let dotted = is(toks, j, T::Sym('.'));
+    if dotted {
+        j += 1;
+    }
+    if !is(toks, j, T::Sym('=')) {
+        return None;
+    }
+    let mut bpm: i64 = toks.get(j + 1).filter(|t| t.t == T::Num).and_then(|t| t.v.parse().ok())?;
+    if dotted {
+        bpm = bpm * 3 / 2;
+    }
+    (10..=600).contains(&bpm).then_some(((bpm, beat), j + 2))
+}
+
 fn layout_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, ScoreError> {
     let _deeper = deeper(at_of(toks, i))?;
     let end = skip_block(toks, i + 1)?;
     if toks[i].v != "layout" {
+        if let Some((tempo, after)) = midi_tempo(toks, i + 2, end - 1) {
+            beyond();
+            paper.midi_tempo = Some(tempo);
+            if after < end - 1 || !is_cmd(toks, i + 2, "tempo") {
+                warn("the \\midi block's settings but its \\tempo are not read", toks[i].at);
+            }
+            return Ok(end);
+        }
         if end > i + 3 {
             warn(format!("the \\{} block's settings are not read", toks[i].v), toks[i].at);
         }
@@ -2982,6 +3171,30 @@ fn voice_kind(kind: &str) -> bool {
     matches!(kind, "Voice" | "DrumVoice" | "TabVoice" | "CueVoice")
 }
 
+/// `= "name"` or `= name` at `i`, after a context's kind: LilyPond takes a
+/// bare word for a name as it takes a string (`\context Voice = V`).
+fn named_context(toks: &[Tok], i: usize) -> bool {
+    is(toks, i, T::Sym('=')) && toks.get(i + 1).is_some_and(|t| matches!(t.t, T::Str | T::Word))
+}
+
+/// `\new Voice [= name] [\with { … }] <<` at `i` whose `<< >>` holds what a
+/// voice cannot — its lyrics (`\new Lyrics \lyricsto …`), a staff: the `<<`,
+/// read as a score's, LilyPond making the voice inside it its staff
+/// (score #1031).
+fn voice_of_staves(toks: &[Tok], i: usize) -> Option<usize> {
+    if !((is_cmd(toks, i, "new") || is_cmd(toks, i, "context")) && toks.get(i + 1).is_some_and(|k| voice_kind(&k.v))) {
+        return None;
+    }
+    let mut j = i + 2;
+    if named_context(toks, j) {
+        j += 2;
+    }
+    if is_cmd(toks, j, "with") {
+        j = skip_block(toks, j + 1).ok()?;
+    }
+    (double(toks, j, '<') && holds_staves(toks, j)).then_some(j)
+}
+
 /// Whether the `<<` at `i` holds staves, rather than the voices of one.
 fn holds_staves(toks: &[Tok], i: usize) -> bool {
     let Ok(end) = twin_end(toks, i) else { return false };
@@ -3044,6 +3257,9 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
     if tk.t == T::Cmd && (tk.v == "new" || tk.v == "context") {
         let kind = toks.get(i + 1).map(|t| t.v.clone()).unwrap_or_default();
         if voice_kind(&kind) {
+            if let Some(j) = voice_of_staves(toks, i) {
+                return group(toks, j, st, staves, groups, depth, GroupKind::None, &Props::default());
+            }
             return staff(toks, i, st, staves, Props::default(), StaffKind::Notes);
         }
         if staff_kind(&kind).is_none() && group_kind(&kind).is_none() {
@@ -3054,7 +3270,7 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
         }
         i += 2;
         let mut name = None;
-        if i + 1 < toks.len() && toks[i].t == T::Sym('=') && toks[i + 1].t == T::Str {
+        if named_context(toks, i) {
             name = Some(toks[i + 1].v.clone());
             i += 2;
         }
@@ -3062,7 +3278,10 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
         if is_cmd(toks, i, "with") {
             i = with(toks, i, &mut props)?;
         }
-        if let Some(sk) = staff_kind(&kind) {
+        if let Some(mut sk) = staff_kind(&kind) {
+            if sk == StaffKind::Tab && !props.string_tunings.is_empty() && props.string_tunings.len() != 6 {
+                sk = StaffKind::TabStrings(props.string_tunings.len() as u8);
+            }
             return staff_named(toks, i, st, staves, props, sk, name);
         }
         if is_cmd(toks, i, "autoChange") || is_cmd(toks, i, "autochange") {
@@ -3123,6 +3342,10 @@ fn group(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, gro
         // A voice, or music, with no staff of its own: LilyPond makes it one.
         let shorthand = toks[i].t == T::Cmd && (toks[i].v == "chords" || toks[i].v == "drums");
         let voice = !shorthand && (!ctx || voice_kind(kind_here));
+        if let Some(j) = voice_of_staves(toks, i).filter(|_| voice) {
+            i = group(toks, j, st, staves, groups, depth + 1, GroupKind::None, &Props::default())?;
+            continue;
+        }
         if voice {
             if bare || !wraps(toks, i) {
                 return refuse("two voices in one staff are not drawn: give each its own \\new Staff", toks[i].at);
@@ -3219,7 +3442,7 @@ fn auto_change(toks: &[Tok], i: usize, st: &mut Base, staves: &mut Vec<Staff>) -
 fn lyrics_part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut [Staff]) -> Result<usize, ScoreError> {
     let at = toks[i].at;
     i += 2;
-    if is(toks, i, T::Sym('=')) && is(toks, i + 1, T::Str) {
+    if named_context(toks, i) {
         i += 2;
     }
     if is_cmd(toks, i, "with") {
@@ -3234,14 +3457,11 @@ fn lyrics_part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut [Staff]) 
         voice = toks.get(i + 1).map(|t| t.v.clone());
         i += 2;
     }
-    if is_cmd(toks, i, "lyricmode") || is_cmd(toks, i, "lyrics") {
-        i += 1;
-    }
-    if !is(toks, i, T::Lyrics) {
+    let Some((held, after)) = lyrics_at(toks, i) else {
         return refuse("\\new Lyrics wants \\lyricsto \"voice\" { words } or \\lyricmode { words }", at);
-    }
-    let syllables = syllables(&toks[i].lyrics, at)?;
-    i += 1;
+    };
+    let syllables = syllables(&toks[held].lyrics, at)?;
+    i = after;
     if braced {
         if !is(toks, i, T::Sym('}')) {
             return refuse("a '{' that is never closed", at);
@@ -3270,6 +3490,14 @@ fn with(toks: &[Tok], mut i: usize, props: &mut Props) -> Result<usize, ScoreErr
             i = staff_prop(toks, i, props, "\\with")?;
             continue;
         }
+        if toks[i].t == T::Word && toks[i].v == "stringTunings" && is(toks, i + 1, T::Sym('=')) {
+            i = string_tunings(toks, i, props)?;
+            continue;
+        }
+        if let Some(j) = group_setting(toks, i, props)? {
+            i = j;
+            continue;
+        }
         // What the engraver draws — `\RemoveEmptyStaves`, `\override
         // TimeSignature.style`, `fontSize = #-2` — is honoured for the
         // context; what else it says (`\consists` …) is read and passed over.
@@ -3296,6 +3524,32 @@ fn with(toks: &[Tok], mut i: usize, props: &mut Props) -> Result<usize, ScoreErr
     }
     Ok(i + 1)
 }
+
+/// What a group's `\with` says that is honoured (score #1032):
+/// `systemStartDelimiter = #'SystemStartSquare` — the sign that joins its
+/// staves, drawn as it names — and `\consists "Instrument_name_engraver"`,
+/// which the group's name needs in LilyPond and nothing here.
+fn group_setting(toks: &[Tok], i: usize, props: &mut Props) -> Result<Option<usize>, ScoreError> {
+    let t = &toks[i];
+    if t.t == T::Word && t.v == "systemStartDelimiter" && is(toks, i + 1, T::Sym('=')) {
+        let end = value_end(toks, i + 2)?;
+        let Some(name) = toks[i + 2..end].iter().find(|w| w.t == T::Word).map(|w| w.v.clone()) else { return Ok(None) };
+        if !["SystemStartBar", "SystemStartBrace", "SystemStartBracket", "SystemStartSquare"].contains(&name.as_str()) {
+            return Ok(None);
+        }
+        beyond();
+        props.look.insert(SYSTEM_START.into(), crate::look::Val::Sym(name));
+        return Ok(Some(end));
+    }
+    if is_cmd(toks, i, "consists") && toks.get(i + 1).is_some_and(|a| matches!(a.t, T::Str | T::Word) && a.v == "Instrument_name_engraver") {
+        beyond();
+        return Ok(Some(i + 2));
+    }
+    Ok(None)
+}
+
+/// The setting a group's sign is kept under.
+pub(crate) const SYSTEM_START: &str = "systemStartDelimiter";
 
 fn staff_prop(toks: &[Tok], mut i: usize, props: &mut Props, what: &str) -> Result<usize, ScoreError> {
     let tk = toks[i].clone();
@@ -3380,6 +3634,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         tuplet: None,
         tuplet_outer: None,
         chord: None,
+        again: None,
         voice_cmd: None,
         voice_name: None,
         voice_names: Vec::new(),
@@ -3417,7 +3672,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
     }
     match kind {
         StaffKind::Drums => st.events.push(Ev { k: Kind::Clef, clef: Clef { sign: Sign::Percussion, line: 0, octave: 0 }, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() }),
-        StaffKind::Tab => st.events.push(Ev { k: Kind::Clef, clef: Clef { sign: Sign::Tab, line: 0, octave: 0 }, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() }),
+        StaffKind::Tab | StaffKind::TabStrings(_) => st.events.push(Ev { k: Kind::Clef, clef: Clef { sign: Sign::Tab, line: 0, octave: 0 }, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() }),
         StaffKind::Rhythmic => st.events.push(Ev { k: Kind::Clef, clef: Clef { sign: Sign::Rhythmic, line: 0, octave: 0 }, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() }),
         _ => {}
     }
@@ -3545,6 +3800,7 @@ fn expr(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -
         T::Sym('<') if twin(toks, i, '<') => voices(toks, i, st, hd),
         T::Cmd => command(toks, i, st, hd),
         T::Word | T::Sym('<') => note(toks, i, st),
+        T::Num if st.mode == Mode::Notes => note(toks, i, st),
         _ => refuse(format!("'{}' is not expected here", t.v), t.at),
     }
 }
@@ -3583,6 +3839,7 @@ fn music_item(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, 
             T::Cmd => i = command(toks, i, st, hd)?,
             T::Sym('<') if twin(toks, i, '<') => i = voices(toks, i, st, hd)?,
             T::Word | T::Sym('<') => i = note(toks, i, st)?,
+            T::Num if st.mode == Mode::Notes => i = note(toks, i, st)?,
             T::Sym('|') => i += 1,
             T::Sym('~' | '-' | '^' | '_' | '(' | ')' | '[' | ']') => i = post_sign(toks, i, st, hd)?,
             _ => return refuse(format!("'{}' is not expected here", tk.v), tk.at),
@@ -3669,7 +3926,7 @@ struct Part {
 fn ossia(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
     let at = toks[i].at;
     let mut j = i + 2;
-    if is(toks, j, T::Sym('=')) && is(toks, j + 1, T::Str) {
+    if named_context(toks, j) {
         j += 2;
     }
     let mut above = false;
@@ -4563,7 +4820,7 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             }
             let mut j = i + 2;
             let mut name = None;
-            if is(toks, j, T::Sym('=')) && is(toks, j + 1, T::Str) {
+            if named_context(toks, j) {
                 name = Some(toks[j + 1].v.clone());
                 j += 2;
             }
@@ -5039,10 +5296,40 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         }
         return Ok(j + 1);
     }
+    if let Some(style) = head_style_function(word) {
+        return styled_heads(toks, i, st, hd, style);
+    }
     if let Some(j) = layout_command(toks, i, st)? {
         return Ok(j);
     }
     refuse(format!("\\{word} is not a command this reads"), tk.at)
+}
+
+/// The music functions that give the notes they take a head of another
+/// shape: `\xNote` and its names a cross, `\harmonicNote` a diamond.
+fn head_style_function(word: &str) -> Option<&'static str> {
+    match word {
+        "xNote" | "deadNote" | "xNotes" | "deadNotes" => Some("cross"),
+        "harmonicNote" | "harmonicNotes" => Some("harmonic"),
+        _ => None,
+    }
+}
+
+/// `\xNote music`, `\harmonicNote music` at `i`: the note, the chord or
+/// the `{ … }` after it, each of its notes' heads in `style` — what
+/// `\xNotesOn` sets, for that music alone.
+fn styled_heads(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>, style: &str) -> Result<usize, ScoreError> {
+    let tk = &toks[i];
+    if !(starts_expr(toks, i + 1) || matches!(toks.get(i + 1).map(|t| t.t), Some(T::Word | T::Sym('<')))) {
+        return refuse(format!("\\{} wants its music", tk.v), tk.at);
+    }
+    beyond();
+    let before = st.events.len();
+    let j = expr(toks, i + 1, st, hd)?;
+    for ev in st.events.iter_mut().skip(before).filter(|ev| ev.k == Kind::Note) {
+        ev.look = crate::look::with_one(&ev.look, "NoteHead.style".into(), crate::look::Val::Sym(style.to_owned()));
+    }
+    Ok(j)
 }
 
 /// The staff's settings `\set Staff.…` and `\with` read.
@@ -5113,7 +5400,7 @@ fn layout_command(toks: &[Tok], i: usize, st: &mut St) -> Result<Option<usize>, 
             }
             Ok(skip_setting(toks, i, "")?)
         }
-        w if SWITCHES.contains(&w) => {
+        w if SWITCHES.contains(&w) || MORE_SWITCHES.contains(&w) => {
             if let Some(end) = crate::look::command(toks, i, &mut st.look, elapsed(&st.events))? {
                 return done(end);
             }
@@ -5151,7 +5438,9 @@ fn layout_command(toks: &[Tok], i: usize, st: &mut St) -> Result<Option<usize>, 
             if !is(toks, i + 1, T::Word) {
                 return refuse("\\transposition wants a pitch", at);
             }
-            warn("\\transposition is not read: the notes are played as written", at);
+            // The pitch a written middle C sounds: what the staff plays.
+            let Some((step, alter)) = pitch_name_in(st.lang, &toks[i + 1].v) else { return refuse("\\transposition wants a pitch", at) };
+            st.props.transposition = semitones(step + 7 * toks[i + 1].marks, alter) - semitones(7, 0);
             done(i + 2)
         }
         "compressFullBarRests" => {
@@ -5648,7 +5937,12 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     let mut figures: Vec<Vec<Run>> = Vec::new();
     // `cis!` and `cis?`: the accidentals written as a reminder.
     let (mut forced, mut cautionary): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
-    if st.mode == Mode::Figures && tk.t == T::Sym('<') {
+    if tk.t == T::Num {
+        // A duration alone, `c4~ 8`: the note or the chord before it, again.
+        beyond();
+        let Some(same) = st.again.clone() else { return refuse("a duration alone repeats the note before it, and there is none", tk.at) };
+        pitches = same;
+    } else if st.mode == Mode::Figures && tk.t == T::Sym('<') {
         // `<6 4+>`: its figures, top to bottom; held where a note would be,
         // and sounding nothing.
         let (lines, j) = figure_lines(toks, i)?;
@@ -5890,6 +6184,9 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     }
     st.items += 1;
     ev.graces = std::mem::take(&mut st.graces);
+    if st.mode == Mode::Notes && rest.is_none() {
+        st.again = Some(ev.pitches.clone());
+    }
     match rest {
         None => {
             ev.n = Some(st.notes);
@@ -6160,7 +6457,32 @@ fn markup_item(toks: &[Tok], i: usize, weight: Weight, runs: &mut Vec<Run>, at: 
                 runs.push(Run { weight, ..Run::glyph(glyph) });
                 Ok(j + 1)
             }
-            other => refuse(format!("\\{other} is not markup this draws"), t.at),
+            "override" | "with-url" | "with-link" | "page-link" | "pad-markup" | "pad-around" | "pad-x" | "hcenter-in" | "rotate" | "scale" | "with-dimensions" | "general-align" => {
+                // `\override #'(font-name . "…")` and their kin: Scheme
+                // arguments, then the markup they style, drawn as it is.
+                let mut j = i + 1;
+                while is(toks, j, T::Sym('#')) {
+                    j = scheme_end(toks, j)?;
+                }
+                markup_item(toks, j, weight, runs, at)
+            }
+            other => {
+                // Markup this does not draw (score #1031) — a picture
+                // (`\epsfile`), a line, a command of the file's own — is
+                // passed over with its Scheme arguments, and said so; what
+                // it styles, when it styles anything, is kept as words.
+                warn(if other == "epsfile" { "\\epsfile: a picture in a \\markup is not drawn".to_owned() } else { format!("\\{other} is not markup this draws") }, t.at);
+                let mut j = i + 1;
+                while is(toks, j, T::Sym('#')) {
+                    j = scheme_end(toks, j)?;
+                }
+                const ALONE: [&str; 12] =
+                    ["epsfile", "null", "strut", "draw-line", "draw-hline", "draw-dashed-line", "draw-dotted-line", "draw-circle", "char", "postscript", "filled-box", "eyeglasses"];
+                match toks.get(j).map(|n| n.t) {
+                    Some(T::Sym('{') | T::Str | T::Cmd) if !ALONE.contains(&other) => markup_item(toks, j, weight, runs, at),
+                    _ => Ok(j),
+                }
+            }
         },
         _ => refuse(format!("'{}' is not markup this draws", t.v), t.at),
     }

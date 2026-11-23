@@ -34,6 +34,9 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
     for (stf, timed) in parsed.staves.iter().zip(&timed) {
         measured.push(measures(timed.as_deref().unwrap_or(&stf.events))?);
     }
+    // `\midi { \tempo 4 = 100 }`: the source's own tempo, over the host's.
+    let source_tempo = parsed.paper.midi_tempo.map(|(bpm, beat)| MidiOptions { bpm: bpm as f64, beat, ..*opts });
+    let opts = source_tempo.as_ref().unwrap_or(opts);
     let holds = holds(&measured, opts);
     let mut tracks: Vec<Vec<u8>> = Vec::new();
     for (si, stf) in parsed.staves.iter().enumerate() {
@@ -47,7 +50,7 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
         let name = props.instrument_name.clone().unwrap_or_else(|| if si == 0 { title.clone() } else { String::new() });
         // A drum staff plays on General MIDI's percussion channel, the tenth.
         let channel = if stf.kind == StaffKind::Drums { 9 } else { (if si < 9 { si } else { si + 1 }).min(15) as i64 };
-        let track = track(&measured[si], opts, &holds, program, &name, channel, tracks.is_empty());
+        let track = track(&measured[si], opts, &holds, program, &name, channel, tracks.is_empty(), if channel == 9 { 0 } else { props.transposition });
         let mut controls: Vec<u8> = Vec::new();
         if let Some(v) = props.midi_maximum_volume {
             controls.extend([0, (176 + channel) as u8, 7, (v.clamp(0.0, 1.0) * 127.0 + 0.5) as u8]);
@@ -87,7 +90,7 @@ struct Hairpin {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], program: i64, name: &str, channel: i64, first_track: bool) -> Vec<u8> {
+fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], program: i64, name: &str, channel: i64, first_track: bool, transposition: i64) -> Vec<u8> {
     let mut ev_out: Vec<(i64, i64, Vec<u8>)> = Vec::new();
     if !name.is_empty() {
         let mut meta = vec![255, 3];
@@ -193,6 +196,17 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], program: i64, name: &
             // what starts there waits for the breath too (score #977).
             let off = e.2.first().is_some_and(|b| b & 0xF0 == 0x80);
             e.0 = held(holds, e.0, off);
+        }
+    }
+    if transposition != 0 {
+        // `\transposition`: every note of the staff sounds that far from
+        // where it is written.
+        for e in &mut ev_out {
+            if let [status, key, ..] = e.2.as_mut_slice() {
+                if matches!(*status & 0xF0, 0x80 | 0x90) {
+                    *key = (i64::from(*key) + transposition).clamp(0, 127) as u8;
+                }
+            }
         }
     }
     ev_out.sort_by_key(|e| e.0 * 4 + e.1);

@@ -120,6 +120,7 @@ pub(crate) fn line_reach(bars: &[Bar], line: &Line) -> (f64, f64) {
 pub(crate) fn staff_height(kind: StaffKind) -> f64 {
     match kind {
         StaffKind::Tab => 7.5,
+        StaffKind::TabStrings(n) => 1.5 * (f64::from(n) - 1.0),
         _ => 4.0,
     }
 }
@@ -158,17 +159,19 @@ pub(crate) fn fret_em() -> f64 {
 /// written (`\\5`), or the highest string the note reaches with a fret
 /// of 0 or more not taken by another head of the chord, the highest note
 /// first.
-pub(crate) fn tab_frets(ev: &mut Ev) {
+pub(crate) fn tab_frets(ev: &mut Ev, tuning: &[i64]) {
+    let tuning = if tuning.is_empty() { &GUITAR[..] } else { tuning };
+    let open = |s: i64| tuning.get((s - 1) as usize).copied();
     let mut used: Vec<i64> = Vec::new();
     let mut out = Vec::new();
     for h in ev.heads.iter().rev() {
         let key = crate::parse::semitones(h.d, h.alter) + 48;
         // A string that cannot sound the note is not the one it is played on.
-        let written = ev.strings.iter().find(|s| s.0 == h.d).map(|s| s.1).filter(|&s| !used.contains(&s) && key >= GUITAR[(s - 1) as usize]);
-        let string = written.or_else(|| (1..=6).find(|&s| !used.contains(&s) && key >= GUITAR[(s - 1) as usize]));
+        let written = ev.strings.iter().find(|s| s.0 == h.d).map(|s| s.1).filter(|&s| !used.contains(&s) && open(s).is_some_and(|o| key >= o));
+        let string = written.or_else(|| (1..=tuning.len() as i64).find(|&s| !used.contains(&s) && open(s).is_some_and(|o| key >= o)));
         let Some(s) = string else { continue };
         used.push(s);
-        out.push((s, key - GUITAR[(s - 1) as usize]));
+        out.push((s, key - open(s).unwrap_or(key)));
     }
     ev.tab = out;
 }
@@ -706,7 +709,7 @@ fn after_layout(ev: &mut Ev) {
     ev.right = start + x;
 }
 
-fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
+fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind, tuning: &[i64]) {
     for bar in bars.iter_mut() {
         for ev in &mut bar.items {
             let t = space_ticks(ev);
@@ -726,8 +729,8 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 ev.head_w = Some(glyph("noteheadBlack").advance);
                 continue;
             }
-            if kind == StaffKind::Tab && ev.k == Kind::Note {
-                tab_frets(ev);
+            if kind.strings().is_some() && ev.k == Kind::Note {
+                tab_frets(ev, tuning);
                 let hw = glyph("noteheadBlack").advance;
                 let w = ev.tab.iter().map(|t| text_width(&t.1.to_string(), Weight::Bold, fret_em())).fold(0.0, f64::max);
                 ev.head_w = Some(hw);
@@ -735,7 +738,7 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 ev.right = hw + (w - hw).max(0.0) / 2.0 + 0.2;
                 continue;
             }
-            if kind == StaffKind::Tab {
+            if kind.strings().is_some() {
                 ev.left = 0.0;
                 ev.right = 0.0;
                 continue;
@@ -2386,7 +2389,7 @@ fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) ->
         beams(&mut bars)?;
     }
     let sh = shortest(bars.iter());
-    columns(&mut bars, sh, kind);
+    columns(&mut bars, sh, kind, &parsed.staves[0].props.string_tunings);
     let mut left = layout.left.unwrap_or(0.0);
     let indent = layout.indent.unwrap_or(0.0);
     let mut lines = break_bars(&mut bars, width, indent, opts.short_indent, opts);
@@ -2635,7 +2638,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
     crate::cross::directions(&mut all, &mut plan);
     let sh = shortest(all.iter().flatten());
     for (si, bars) in all.iter_mut().enumerate() {
-        columns(bars, sh, staves_src[si].kind);
+        columns(bars, sh, staves_src[si].kind, &staves_src[si].props.string_tunings);
     }
     let mut master: Vec<Bar> = (0..count).map(|k| master_bar(&all, k, sh)).collect();
     let deco = groups_width(&parsed.groups, staves_src.len());
@@ -2903,7 +2906,7 @@ fn removed(staves: &[crate::parse::Staff], all: &[Vec<Bar>], range: &Range<usize
         .iter()
         .enumerate()
         .map(|(s, stf)| {
-            if !matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab | StaffKind::Rhythmic) {
+            if !matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab | StaffKind::TabStrings(_) | StaffKind::Rhythmic) {
                 return false;
             }
             let look = stf.events.iter().find(|ev| !ev.look.is_empty()).map(|ev| ev.look.clone()).unwrap_or_default();
@@ -2913,7 +2916,7 @@ fn removed(staves: &[crate::parse::Staff], all: &[Vec<Bar>], range: &Range<usize
             range.clone().all(|b| all[s][b].items.iter().all(|ev| ev.k != Kind::Note))
         })
         .collect();
-    let kept = staves.iter().enumerate().any(|(s, stf)| !out[s] && matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab | StaffKind::Rhythmic));
+    let kept = staves.iter().enumerate().any(|(s, stf)| !out[s] && matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab | StaffKind::TabStrings(_) | StaffKind::Rhythmic));
     if !kept {
         out = vec![false; staves.len()];
     }

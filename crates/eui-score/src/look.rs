@@ -1013,14 +1013,14 @@ pub(crate) fn settle(staves: &mut [crate::parse::Staff], groups: &[crate::parse:
         }
         names.push(match stf.kind {
             StaffKind::Drums => "DrumStaff",
-            StaffKind::Tab => "TabStaff",
+            StaffKind::Tab | StaffKind::TabStrings(_) => "TabStaff",
             StaffKind::Rhythmic => "RhythmicStaff",
             StaffKind::ChordNames => "ChordNames",
             _ => "Staff",
         });
         names.push(match stf.kind {
             StaffKind::Drums => "DrumVoice",
-            StaffKind::Tab => "TabVoice",
+            StaffKind::Tab | StaffKind::TabStrings(_) => "TabVoice",
             _ => "Voice",
         });
         let mut base = Map::new();

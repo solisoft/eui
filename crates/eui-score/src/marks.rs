@@ -1876,7 +1876,7 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
             let (_, bottom) = runs_box(&[Run::words("0", Weight::Regular)], crate::engrave::figure_em());
             return (0.0, crate::engrave::figure_line(lines - 1) + bottom + 0.3);
         }
-        StaffKind::Tab => return (-1.0, 8.5),
+        StaffKind::Tab | StaffKind::TabStrings(_) => return (-1.0, crate::engrave::staff_height(line.kind) + 1.0),
         StaffKind::Ossia if line.bars.clone().all(|b| bars[b].items.iter().all(|ev| ev.spacer)) => return (0.0, 0.0),
         _ => {}
     }

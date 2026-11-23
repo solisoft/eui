@@ -842,7 +842,7 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         draw_ossia(&mut pen, bars, line, top, ranges);
         return;
     }
-    let tab = line.kind == StaffKind::Tab;
+    let tab = line.kind.strings().is_some();
     let first = &bars[line.bars.start];
     // The staff's settings where the line starts: `\omit Staff.StaffSymbol`,
     // `Clef`, `KeySignature`, `BarNumber` …
@@ -865,7 +865,12 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         pen.text(&number, Weight::Regular, number_x, top - 1.6, e);
     }
     let mut x = left + 0.8;
-    if !look.omitted("Clef") {
+    if let Some(strings) = line.kind.strings().filter(|n| *n != 6 && !look.omitted("Clef")) {
+        // A tablature of fewer strings: its sign in the middle of them, as
+        // much smaller as they are fewer (score #1032).
+        let height = crate::engrave::staff_height(line.kind);
+        pen.glyph_k(clef_glyph(first.clef), x, top + height / 2.0, (strings as f64 / 6.0).clamp(0.6, 1.2));
+    } else if !look.omitted("Clef") {
         draw_clef(&mut pen, first.clef, x, top);
     }
     x += line.clef_w.unwrap_or(crate::engrave::clef_advance(first.clef)) + 1.0;
@@ -1344,7 +1349,21 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
             continue;
         }
         let x = left - 0.3 - (deepest - g.depth) as f64 * 1.6;
-        if g.kind == GroupKind::Brace {
+        // `systemStartDelimiter`: the sign the group's `\with` names.
+        let named = look.sym(crate::parse::SYSTEM_START).unwrap_or("");
+        if named == "SystemStartBar" {
+            continue;
+        }
+        if named == "SystemStartSquare" {
+            // A square bracket: a thin line and a hook at each end.
+            let (bx, thick) = (x - 0.5, 0.16);
+            pen.rect(bx, y0 - thick / 2.0, thick, y1 - y0 + thick);
+            pen.rect(bx, y0 - thick / 2.0, 0.9, thick);
+            pen.rect(bx, y1 - thick / 2.0, 0.9, thick);
+            edge = edge.min(bx - 0.3);
+            continue;
+        }
+        if (g.kind == GroupKind::Brace && named != "SystemStartBracket") || named == "SystemStartBrace" {
             draw_brace(pen, x, y0, y1);
             edge = edge.min(x - 1.3);
         } else {
@@ -1889,7 +1908,7 @@ fn draw_runs(pen: &mut Pen, runs: &[Run], mut x: f64, y: f64, e: f64) {
 /// A tablature's six strings, each broken where a fret is written on it.
 fn draw_strings(pen: &mut Pen, bars: &[Bar], line: &Line, top: f64) {
     let e = crate::engrave::fret_em();
-    let mut gaps: Vec<Vec<(f64, f64)>> = vec![Vec::new(); 6];
+    let mut gaps: Vec<Vec<(f64, f64)>> = vec![Vec::new(); line.kind.strings().unwrap_or(6)];
     for b in line.bars.clone() {
         for ev in &bars[b].items {
             let xc = ev.x + ev.head_w.unwrap_or(0.0) / 2.0;

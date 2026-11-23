@@ -166,6 +166,38 @@ release. A wire change lands here first, is released, and then the pin moves.
 - A score reads LilyPond 2.24's jumps, `\jump "D.S. al Coda"` and `\fine`,
   set in italics against the bar line that ends their bar; a rehearsal
   mark at the same bar line stands over them instead of through them.
+- A score opens two files found in the wild as they are written (score
+  #1031, #1032; `tests/lilypond/real/`), where it refused them. What they
+  needed: a context named by a bare word (`\context Voice = V`); a
+  `\new Voice` that holds its own `\new Lyrics` in a `ChoirStaff`, LilyPond
+  making it its staff; `\lyricsto "V" { \words }` and `\addlyrics
+  { \words }`, a variable in the braces; a duration written alone, `c4~ 8`,
+  repeating the note or the chord before it; `\xNote`, `\deadNote` and
+  `\harmonicNote` around a note, a chord or a block, their heads a cross
+  or a diamond; staves of different lengths, the shorter going on in
+  silence where every staff had to have the same bars; a `\markup`'s
+  `\override #'(font-name . "…")`, its words kept, and any markup command
+  this does not draw — `\epsfile`'s picture too — passed over with a
+  warning instead of losing the title; `\stopStaff` and `\startStaff`,
+  passed over with a warning; lyrics sung to a voice nobody named, left
+  out with a warning as LilyPond leaves them.
+- A tablature has the strings its tuning gives it (score #1032):
+  `\new TabStaff \with { stringTunings = #bass-tuning }` draws a bass's
+  four strings, E A D G, and its frets on them — where every tablature
+  was a guitar's six. LilyPond's tunings are read by name (the guitar's
+  and its drop D, open G, DADGAD…, the basses' four, five and six strings,
+  ukulele, banjo, mandolin, the violin family), and one written out,
+  `\stringTuning <e,, a,, d, g,>`, of three to eight strings.
+- A group's `systemStartDelimiter` is drawn (score #1032):
+  `#'SystemStartSquare` a square bracket, and the brace, the bracket or
+  the plain bar where a group asks for another's sign; `\consists
+  "Instrument_name_engraver"`, which a group's name needs in LilyPond, is
+  read without a warning.
+- `\transposition` is played (score #1032): a staff sounds that far from
+  where it is written — `\transposition c` an octave down, a bass's; `bes`
+  a tone down, a B flat clarinet's — where it was passed over with a
+  warning and played as written. `\midi { \tempo 4 = 100 }` is the speed
+  a source with no `\tempo` in its music is played at, over the host's.
 - A score draws the arpeggio's other styles (score #1026):
   `\arpeggioBracket`, a bracket before the chord — played together, as
   the sign says — and `\arpeggioParenthesis`, a curve like a slur's, the

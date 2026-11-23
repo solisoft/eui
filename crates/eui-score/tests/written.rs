@@ -175,8 +175,9 @@ fn staves_are_as_long_as_the_longest() {
     let staves = ["\\new Staff { c'4 }"; 60].join(" ");
     too_many_notes(&format!("<< \\new Staff {{ s1*500 }} {staves} >>"));
     let w = accepted(r"<< \new Staff { s1*100 } \new Staff { c'4 } >>");
-    // Two staves of 100 bars, each opening 25 systems.
-    assert_eq!(w.events, 2 * (100 + 25));
+    // Two staves of 100 bars, each opening 25 systems; the second's note,
+    // and the silence it goes on in to the end (score #1032).
+    assert_eq!(w.events, 2 * (100 + 25) + 1);
 }
 
 #[test]

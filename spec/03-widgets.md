@@ -609,11 +609,27 @@ construct as LilyPond 2.25 draws it:
   10), `\new TabStaff` (standard tuning, each note on the highest string
   that reaches it, `\5` naming one — passed over when the note is below
   that string — and circled over the note on a staff; frets, no rhythm).
+- *Files as they are written* (score #1031, #1032): a context named by a
+  bare word (`\context Voice = V`); a `\new Voice` holding its own
+  `\new Lyrics`, which makes its staff; a variable in a lyric block's
+  braces (`\lyricsto "V" { \words }`); a duration alone (`c4~ 8`), the
+  note or chord before it again; `\xNote`, `\deadNote` and
+  `\harmonicNote`, their music's heads a cross or a diamond; staves of
+  different lengths, the shorter silent to the end; a tablature of the
+  strings its `stringTunings` names — LilyPond's tunings by name
+  (`#bass-tuning`: four strings, E A D G) or `\stringTuning <…>`, three
+  to eight strings, six in standard tuning otherwise; a group's
+  `systemStartDelimiter` (`#'SystemStartSquare`, a square bracket);
+  `\transposition`, played — the staff sounds that far from where it is
+  written; `\midi { \tempo 4 = 100 }`, the speed of a source whose music
+  writes no `\tempo`, over the host's. A `\markup` command the engraver
+  does not draw (`\epsfile`) is passed over with a warning and its words
+  kept; `\stopStaff` and `\startStaff` are passed over with a warning,
+  as are lyrics sung to a voice nobody named.
 
 - *Real files* (score #359): layout settings — `\override`, `\revert`,
   `\once`, `\tweak`, `\set`, `\unset`, the direction and style switches,
-  `\transposition`, a context's `\with`, `\layout`, `\midi` and `\paper`
-  settings, top-level `\markup`, `\include` and unprinted header fields —
+  a context's `\with`, `\layout`, `\midi` and `\paper` settings, top-level `\markup`, `\include` and unprinted header fields —
   read whole and passed over, each reported as a warning
   (`eui_score::warnings(src)`); `\stemUp`/`\stemDown`/`\stemNeutral` and
   `\autoBeamOff`/`\autoBeamOn` honoured; `\breathe`, `\caesura`,

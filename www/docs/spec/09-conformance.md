@@ -1116,6 +1116,26 @@ version 7) and a margin.
   (`a_tablature_puts_each_note_on_the_highest_string_that_reaches_it`); a
   rehearsal mark stands over an ottava's figure beside it
   (`a_rehearsal_mark_stands_over_an_ottava_that_starts_beside_it`).
+- **A file found in the wild opens as it is written** (03 §1.4; score
+  #1031, #1032), in `crates/eui-score/tests/real_files.rs`: the two files
+  of `tests/lilypond/real/`, unedited, engrave on a screen and on their
+  paper, play and print, with the warnings listed and no refusal
+  (`le_grand_cerf_opens_as_it_is`, `blues_en_sib_opens_as_it_is`); a bare
+  word names a context and a voice makes its staff
+  (`a_context_is_named_by_a_bare_word_and_a_voice_makes_its_staff`); a
+  voice holds its lyrics, a variable in their braces
+  (`a_voice_holds_its_lyrics_and_lyricsto_takes_a_variable_in_braces`);
+  markup not drawn keeps its words
+  (`markup_this_does_not_draw_keeps_its_words`); a duration alone repeats
+  the note (`a_duration_alone_repeats_the_note_before_it`); `\xNote` and
+  `\harmonicNote` change heads only
+  (`x_notes_and_harmonic_notes_change_their_heads_only`); a shorter staff
+  goes on in silence (`a_staff_that_stops_early_goes_on_in_silence`); a
+  tablature's strings and frets are its tuning's
+  (`a_tablature_has_the_strings_its_tuning_gives_it`); a group's sign is
+  the one it names (`a_group_is_joined_by_the_sign_it_names`);
+  `\transposition` and `\midi`'s `\tempo` are played
+  (`a_transposition_is_played_and_the_midi_block_gives_the_tempo`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11
