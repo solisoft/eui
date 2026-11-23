@@ -246,20 +246,45 @@ fn a_chords_accidentals_take_no_more_room_than_columns_did() {
     assert!(tucked < 3.6 - 0.05, "the flats go under the sharps: {tucked}");
 }
 
-/// Notes an octave apart carry their accidentals in one column, whatever
-/// stands between them.
+/// Notes an octave apart carry their accidentals in one column.
 #[test]
 fn octaves_share_their_accidentals_column() {
-    for src in ["{ <cis' cis''>1 }", "{ <cis' cis'' dis''>1 }", "{ <ees' g' bes' ees''>1 }", "{ <fis ais cis' fis' ais'>1 }"] {
+    for src in ["{ <cis' cis''>1 }", "{ <ees' g' bes' ees''>1 }", "{ <cis' e' gis' cis''>1 }", "{ <d' fis' a' d'' fis''>1 }"] {
         let eng = engrave(src, 120.0, &Layout::default()).unwrap();
         let ev = eng.staves[0][0].items.iter().find(|e| e.heads.len() > 1).expect("a chord");
         let accs: Vec<_> = ev.heads.iter().filter(|h| h.acc.is_some()).collect();
+        let mut pairs = 0;
         for a in &accs {
-            for b in accs.iter().filter(|b| (b.pos - a.pos) % 7 == 0) {
+            for b in accs.iter().filter(|b| b.pos != a.pos && (b.pos - a.pos) % 7 == 0) {
                 assert_eq!(a.acc_x, b.acc_x, "{src}: the octave {} / {} in two columns", a.pos, b.pos);
+                pairs += 1;
             }
         }
+        assert!(pairs > 0, "{src}: an octave with two accidentals");
     }
+}
+
+/// … but not at the price of a gap before a head (Gould, and what the eye
+/// asks): in `<cis' cis'' dis''>` the upper C's sharp stands out past the
+/// D's, and the lower C's, which nothing keeps from its head, stays at it —
+/// where a sharp alone on a note is. It stood a column out, under the
+/// upper one, white between it and its note.
+#[test]
+fn an_octaves_lower_accidental_stays_at_its_head_when_the_upper_one_is_pushed_out() {
+    let x_of = |src: &str, pos: i64| {
+        let eng = engrave(src, 120.0, &Layout::default()).unwrap();
+        let ev = eng.staves[0][0].items.iter().find(|e| !e.heads.is_empty()).expect("a note");
+        ev.heads.iter().find(|h| h.pos == pos).and_then(|h| h.acc_x).expect("its accidental")
+    };
+    // c' is six half spaces under the middle line, c'' one over, d'' two.
+    let lone = x_of("{ cis'1 }", -6);
+    assert_eq!(x_of("{ <cis' cis'' dis''>1 }", -6), lone, "the low sharp at its head");
+    assert_eq!(x_of("{ <cis' cis'' dis''>1 }", 2), lone, "the top sharp at its head");
+    assert!(x_of("{ <cis' cis'' dis''>1 }", 1) < lone - 1.0, "the upper C's sharp a column out");
+    // The lower one pushed out too: one column again.
+    assert_eq!(x_of("{ <cis' dis' cis'' dis''>1 }", -6), x_of("{ <cis' dis' cis'' dis''>1 }", 1));
+    assert_accidentals_clear("{ <cis' cis'' dis''>1 }");
+    assert_accidentals_clear("{ <cis' dis' cis'' dis''>1 }");
 }
 
 /// A beam's ink at `x`, top and bottom, y down from the top line: all its

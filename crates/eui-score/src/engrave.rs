@@ -1043,16 +1043,10 @@ fn outline_bands(fill: &[f64], cap: f64) -> Vec<(i64, f64, f64)> {
     bands.into_iter().map(|(band, (left, right))| (band, left, right.min(cap))).collect()
 }
 
-/// The accidentals of notes an octave apart, which stand in one column.
-struct AccGroup {
-    /// The heads, the highest first.
-    heads: Vec<usize>,
-    /// Their widest sign's advance: the column's right edge from its x.
-    w: f64,
-}
-
 /// A chord's accidentals, as LilyPond's `Accidental_placement` puts them
-/// (score #1019): the notes an octave apart share a column; the columns are
+/// (score #1019): the notes an octave apart share a column — but one whose
+/// sign may stand at its own head stays there when the other has to stand
+/// further out, as Gould has it, rather than leave a gap; the columns are
 /// placed the top one first, then the bottom one, then the second from the
 /// top, the second from the bottom … (the zig-zag of the engraving books),
 /// each as near the heads as the ink already there lets it — the heads, a
@@ -1064,18 +1058,13 @@ fn place_accidentals(ev: &mut Ev) -> f64 {
     let hw = ev.head_w.unwrap_or(0.0);
     let aside = if shifted { -(hw - RULE.stem) } else { 0.0 };
     // The columns, the one with the highest note first (the heads go up).
-    let mut groups: Vec<AccGroup> = Vec::new();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
     for hk in (0..ev.heads.len()).rev() {
-        let Some(acc) = ev.heads.get(hk).and_then(|h| h.acc) else { continue };
-        let (pos, paren) = ev.heads.get(hk).map_or((0, false), |h| (h.pos, h.paren));
-        let w = if paren { paren_width(acc) } else { glyph(acc_name(acc)).advance };
-        let octave = groups.iter_mut().find(|g| g.heads.first().and_then(|&k| ev.heads.get(k)).is_some_and(|h| (h.pos - pos) % 7 == 0));
+        let Some(pos) = ev.heads.get(hk).filter(|h| h.acc.is_some()).map(|h| h.pos) else { continue };
+        let octave = groups.iter_mut().find(|g| g.first().and_then(|&k| ev.heads.get(k)).is_some_and(|h| (h.pos - pos) % 7 == 0));
         match octave {
-            Some(g) => {
-                g.heads.push(hk);
-                g.w = g.w.max(w);
-            }
-            None => groups.push(AccGroup { heads: vec![hk], w }),
+            Some(g) => g.push(hk),
+            None => groups.push(vec![hk]),
         }
     }
     if groups.is_empty() {
@@ -1105,37 +1094,67 @@ fn place_accidentals(ev: &mut Ev) -> f64 {
         };
         from_top = !from_top;
         let Some(group) = groups.get(gi) else { break };
-        // Each sign's bands on the staff, its ink measured from the
-        // column's right edge.
-        let mut ink: Vec<(i64, f64, f64)> = Vec::new();
-        let mut edge = f64::INFINITY;
-        for &hk in &group.heads {
-            let Some(h) = ev.heads.get(hk) else { continue };
-            let Some(acc) = h.acc else { continue };
-            let own = if h.side == -1 { aside } else { 0.0 };
-            edge = edge.min(own - ACC_PADDING);
-            for &(band, left, right) in acc_profile(acc, h.paren) {
-                ink.push((band + band_of(h.pos), left - group.w, right - group.w));
-            }
+        // A note of the octave whose sign nothing keeps from its head keeps
+        // it there, when the others have to stand further out: one column
+        // for an octave only where it leaves no gap before a head.
+        let alone: Vec<usize> = group.iter().copied().filter(|&hk| acc_edge(ev, &skyline, &[hk], aside).is_some_and(|(edge, near)| edge >= near - 1e-9)).collect();
+        if alone.len() == group.len() {
+            rim = rim.min(settle_accidentals(ev, &mut skyline, group, aside));
+            continue;
         }
-        for &(band, _, right) in &ink {
-            if let Some(&left) = skyline.get(&band) {
-                edge = edge.min(left - ACC_PADDING - right);
-            }
+        for &hk in &alone {
+            rim = rim.min(settle_accidentals(ev, &mut skyline, &[hk], aside));
         }
-        for &(band, left, _) in &ink {
-            let e = skyline.entry(band).or_insert(edge + left);
-            *e = e.min(edge + left);
-        }
-        let x = edge - group.w;
-        rim = rim.min(x);
-        for &hk in &group.heads {
-            if let Some(h) = ev.heads.get_mut(hk) {
-                h.acc_x = Some(x);
+        let rest: Vec<usize> = group.iter().copied().filter(|hk| !alone.contains(hk)).collect();
+        rim = rim.min(settle_accidentals(ev, &mut skyline, &rest, aside));
+    }
+    -rim
+}
+
+/// A sign's advance, a reminder's with its parentheses.
+fn acc_width(acc: i64, paren: bool) -> f64 {
+    if paren {
+        paren_width(acc)
+    } else {
+        glyph(acc_name(acc)).advance
+    }
+}
+
+/// Where the column of the accidentals of `heads` may stand, against the
+/// ink in `skyline`: its right edge, and the nearest that edge could be to
+/// the heads with nothing else in the way. None without an accidental.
+fn acc_edge(ev: &Ev, skyline: &HashMap<i64, f64>, heads: &[usize], aside: f64) -> Option<(f64, f64)> {
+    let signs = || heads.iter().filter_map(|&hk| ev.heads.get(hk)).filter_map(|h| h.acc.map(|acc| (h, acc)));
+    let w = signs().map(|(h, acc)| acc_width(acc, h.paren)).fold(0.0, f64::max);
+    let mut near = f64::INFINITY;
+    let mut edge = f64::INFINITY;
+    for (h, acc) in signs() {
+        near = near.min(if h.side == -1 { aside } else { 0.0 } - ACC_PADDING);
+        for &(band, _, right) in acc_profile(acc, h.paren) {
+            if let Some(&left) = skyline.get(&(band + 4 * (4 - h.pos))) {
+                edge = edge.min(left - ACC_PADDING - (right - w));
             }
         }
     }
-    -rim
+    near.is_finite().then(|| (edge.min(near), near))
+}
+
+/// Puts the accidentals of `heads` in one column, as near the heads as the
+/// ink in `skyline` lets it, and adds theirs to it; the column's x.
+fn settle_accidentals(ev: &mut Ev, skyline: &mut HashMap<i64, f64>, heads: &[usize], aside: f64) -> f64 {
+    let Some((edge, _)) = acc_edge(ev, skyline, heads, aside) else { return 0.0 };
+    let w = heads.iter().filter_map(|&hk| ev.heads.get(hk)).filter_map(|h| h.acc.map(|acc| acc_width(acc, h.paren))).fold(0.0, f64::max);
+    let x = edge - w;
+    for &hk in heads {
+        let Some(h) = ev.heads.get_mut(hk) else { continue };
+        let Some(acc) = h.acc else { continue };
+        h.acc_x = Some(x);
+        for &(band, left, _) in acc_profile(acc, h.paren) {
+            let e = skyline.entry(band + 4 * (4 - h.pos)).or_insert(x + left);
+            *e = e.min(x + left);
+        }
+    }
+    x
 }
 
 /// A reminder accidental's width, `cis?`: the sign between parentheses, as
