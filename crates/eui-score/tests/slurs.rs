@@ -293,3 +293,101 @@ fn a_shape_of_another_curve_is_passed_over_with_a_warning() {
         assert_eq!(curves(&set(src), CurveKind::Slur)[0].points, curves(&set(r"{ c''4( d'') }"), CurveKind::Slur)[0].points);
     }
 }
+
+fn hairpins(eng: &Engraved) -> Vec<&eui_score::marks::DynEl> {
+    eng.systems.iter().flat_map(|s| &s.lines).flat_map(|l| &l.dynamics).filter(|d| d.text.is_none()).collect()
+}
+
+/// A hairpin's ends are drawn in by `shorten-pair` (out, for a negative
+/// one), it opens as far as `height` says, and `extra-offset` moves it
+/// whole — set with `\tweak` before `\<` or `\once \override` (score #1020).
+#[test]
+fn a_hairpin_is_shortened_opened_and_moved() {
+    let plain = set(r"{ c''4\< d'' e'' f''\! }");
+    let base = hairpins(&plain)[0];
+    assert!((base.open - 0.6666).abs() < 1e-9);
+    for src in [
+        r"{ c''4-\tweak shorten-pair #'(1 . 1.5) \< d'' e'' f''\! }",
+        r"{ \once \override Hairpin.shorten-pair = #'(1 . 1.5) c''4\< d'' e'' f''\! }",
+        r"{ c''4-\tweak Hairpin.shorten-pair #'(1 . 1.5) \< d'' e'' f''\! }",
+    ] {
+        assert!(eui_score::warnings(src).unwrap().is_empty(), "{src}: {:?}", eui_score::warnings(src));
+        let eng = set(src);
+        let h = hairpins(&eng)[0];
+        assert!((h.x0 - (base.x0 + 1.0)).abs() < 1e-9 && (h.x1 - (base.x1 - 1.5)).abs() < 1e-9, "{src}: {} to {}, from {} to {}", h.x0, h.x1, base.x0, base.x1);
+        assert_eq!(h.y, base.y);
+    }
+    let longer = set(r"{ \once \override Hairpin.shorten-pair = #'(-1 . -0.5) c''4\> d'' e'' f''\! }");
+    let h = hairpins(&longer)[0];
+    assert!((h.x0 - (base.x0 - 1.0)).abs() < 1e-9 && (h.x1 - (base.x1 + 0.5)).abs() < 1e-9);
+    // Wider open: its lines farther from its middle, and lower under the notes for it.
+    let open = set(r"{ \once \override Hairpin.height = #1.2 c''4\< d'' e'' f''\! }");
+    let h = hairpins(&open)[0];
+    assert_eq!(h.open, 1.2);
+    assert!(h.y > base.y + 0.1, "its line is at {}, from {}", h.y, base.y);
+    assert_eq!(h.bbox(), [h.x0, h.y - 1.2, h.x1, h.y + 1.2]);
+    // Moved whole: right half a space, down one and a half.
+    for src in [r"{ \once \override Hairpin.extra-offset = #'(0.5 . -1.5) c''4\< d'' e'' f''\! }", r"{ c''4-\tweak extra-offset #'(0.5 . -1.5) \< d'' e'' f''\! }"] {
+        assert!(eui_score::warnings(src).unwrap().is_empty(), "{src}");
+        let eng = set(src);
+        let h = hairpins(&eng)[0];
+        assert!((h.x0 - (base.x0 + 0.5)).abs() < 1e-9 && (h.x1 - (base.x1 + 0.5)).abs() < 1e-9 && (h.y - (base.y + 1.5)).abs() < 1e-9, "{src}");
+    }
+    // The settings are the next hairpin's alone.
+    let two = set(r"{ \once \override Hairpin.height = #1.2 c''4\< d''\! e''\< f''\! }");
+    assert_eq!(hairpins(&two).iter().map(|h| h.open).collect::<Vec<_>>(), [1.2, 0.6666]);
+}
+
+/// `extra-offset` moves a slur, a phrasing slur or a tie whole.
+#[test]
+fn extra_offset_moves_a_curve_whole() {
+    for (kind, plain, moved) in [
+        (CurveKind::Slur, r"{ c''4( d'' e'' f'') }", r"{ \once \override Slur.extra-offset = #'(0.5 . 1.5) c''4( d'' e'' f'') }"),
+        (CurveKind::Slur, r"{ c''4( d'' e'' f'') }", r"{ c''4-\tweak extra-offset #'(0.5 . 1.5) ( d'' e'' f'') }"),
+        (CurveKind::Phrase, r"{ c''4\( d'' e'' f''\) }", r"{ c''4-\tweak extra-offset #'(0.5 . 1.5) \( d'' e'' f''\) }"),
+        (CurveKind::Phrase, r"{ c''4\( d'' e'' f''\) }", r"{ \once \override PhrasingSlur.extra-offset = #'(0.5 . 1.5) c''4\( d'' e'' f''\) }"),
+        (CurveKind::Tie, r"{ c''2~ c'' }", r"{ c''2-\tweak extra-offset #'(0.5 . 1.5) ~ c'' }"),
+    ] {
+        assert!(eui_score::warnings(moved).unwrap().is_empty(), "{moved}: {:?}", eui_score::warnings(moved));
+        let (a, b) = (set(plain), set(moved));
+        let (a, b) = (curves(&a, kind)[0].points, curves(&b, kind)[0].points);
+        for k in 0..4 {
+            assert!((b[k].0 - (a[k].0 + 0.5)).abs() < 1e-9 && (b[k].1 - (a[k].1 - 1.5)).abs() < 1e-9, "{moved}: point {k}");
+        }
+    }
+}
+
+/// What an editor takes hold of says where it is and where it is written:
+/// a hairpin's two ends and its note, a dynamic's, an articulation's and a
+/// fingering's box and note, a word's.
+#[test]
+fn marks_say_their_box_and_the_note_they_are_written_on() {
+    let src = r#"{ c''4\p\< d''-> e''-3^"dolce" f''\f }"#;
+    let eng = set(src);
+    let ns = notes(&eng);
+    let line = &eng.systems[0].lines[0];
+    let h = hairpins(&eng)[0];
+    assert_eq!((h.item, h.at, h.piece), (ns[0].i, ns[0].at, 0));
+    assert!(h.x0 < h.x1 && h.x0 > ns[0].x && h.x1 < ns[3].x + 2.0);
+    let dyns: Vec<_> = line.dynamics.iter().filter(|d| d.text.is_some()).collect();
+    assert_eq!(dyns.iter().map(|d| (d.item, d.at)).collect::<Vec<_>>(), [(ns[0].i, ns[0].at), (ns[3].i, ns[3].at)]);
+    for d in &dyns {
+        let b = d.bbox();
+        assert!(b[0] == d.x0 && b[2] == d.x1 && b[1] < b[3] && b[1] > 4.0, "a dynamic's box {b:?}");
+    }
+    // The accent is the second note's first articulation, the 3 the third's first fingering.
+    let accent = line.scripts.iter().find(|s| s.figure.is_none()).unwrap();
+    assert_eq!((accent.item, accent.index), (ns[1].i, 0));
+    let b = accent.bbox();
+    assert!(b[0] < accent.x && accent.x < b[2] && b[1] < b[3]);
+    let finger = line.scripts.iter().find(|s| s.figure.is_some()).unwrap();
+    assert_eq!((finger.item, finger.index), (ns[2].i, 0));
+    let b = finger.bbox();
+    assert!(b[2] - b[0] > 0.3 && b[3] - b[1] > 0.5, "a fingering's box {b:?}");
+    let word = &line.texts[0];
+    assert_eq!((word.item, word.index), (ns[2].i, 0));
+    assert!(word.x0 < word.x1 && word.top < word.bottom);
+    // A hairpin a line break parts: a piece a line, each saying which.
+    let broken = set(r"{ c''1\< \break d''1 e''1\! }");
+    assert_eq!(hairpins(&broken).iter().map(|h| (h.item, h.piece)).collect::<Vec<_>>(), [(0, 0), (0, 1)]);
+}

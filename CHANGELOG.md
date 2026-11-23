@@ -32,6 +32,21 @@ release. A wire change lands here first, is released, and then the pin moves.
   curve a line break parts takes a list of such lists, one for each piece;
   a single list is its first piece's. It was passed over with a warning,
   as a `\shape` of any other curve still is.
+- Hairpins and curves are moved and resized by their settings (score
+  #1020), what an editor writes when one is dragged: `Hairpin.shorten-pair`
+  draws a hairpin's two ends in by so much (out, for a negative one),
+  `Hairpin.height` says how far it opens, and `extra-offset` moves a
+  hairpin, a slur, a phrasing slur or a tie whole — each with
+  `-\tweak … \<` (`\>`, `(`, `\(`, `~`) or `\once \override`. They were
+  passed over with a warning, and a `\tweak` before `\<` took the hairpin
+  with it.
+- What is drawn says where it is and where it is written (score #1020):
+  `Line::curve_places` gives each tie, slur and phrasing slur its four
+  control points, the note it starts on (`item`, `at`) and its piece of a
+  broken curve; a dynamic or a hairpin (`DynEl`) its note, its piece and
+  its box, a hairpin its two ends and its opening; an articulation or a
+  fingering (`ScriptPlace`) its note, which of the note's it is, and its
+  box.
 - `\paper`'s `top-markup-spacing`, `score-markup-spacing` and
   `markup-markup-spacing` are read and laid out (score #1025), each by its
   `basic-distance`, `minimum-distance` and `padding`, as LilyPond measures

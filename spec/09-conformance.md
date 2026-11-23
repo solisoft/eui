@@ -1189,7 +1189,14 @@ version 7) and a margin.
   slur's and a tie's, and each piece of a broken curve
   (`shape_reaches_phrasing_slurs_ties_and_each_piece_of_a_broken_curve`);
   one it cannot draw is passed over with a warning
-  (`a_shape_of_another_curve_is_passed_over_with_a_warning`).
+  (`a_shape_of_another_curve_is_passed_over_with_a_warning`). A hairpin
+  is shortened, opened and moved by `shorten-pair`, `height` and
+  `extra-offset` (`a_hairpin_is_shortened_opened_and_moved`), a curve
+  moved whole by `extra-offset` (`extra_offset_moves_a_curve_whole`); a
+  curve says the note it starts on and its piece
+  (`a_curve_says_the_note_it_starts_on`), a hairpin, a dynamic, an
+  articulation, a fingering and a word their note and their box
+  (`marks_say_their_box_and_the_note_they_are_written_on`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11

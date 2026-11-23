@@ -744,7 +744,14 @@ construct as LilyPond 2.25 draws it:
   spaces, a positive dy up, from where they were put; a list of such
   lists moves each piece of a curve a line break parts, a single list its
   first piece. A `\shape` of another curve, or one that is not four
-  offsets, is passed over with a warning.
+  offsets, is passed over with a warning. `extra-offset` moves a slur, a
+  phrasing slur, a tie or a hairpin whole from where it was put;
+  `Hairpin.shorten-pair` `#'(a . b)` draws a hairpin's left end in by a
+  and its right end by b (out, for a negative one), on the piece that
+  holds the end, and `Hairpin.height` is how far each of its lines stands
+  from its middle where it is open (two thirds of a space unset) — each
+  set with `\once \override`, or with `-\tweak` before `\<`, `\>`, `(`,
+  `\(` or `~` (score #1020).
 - *Signs an engraver is expected to know* (score #1026):
   the ornaments `\reverseturn`, `\prallprall`, `\prallmordent`,
   `\upprall`, `\lineprall`, the fermatas `\veryshortfermata`,

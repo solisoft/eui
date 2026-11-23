@@ -146,6 +146,10 @@ const DIRECTED: [&str; 11] = ["Stem", "Slur", "Tie", "PhrasingSlur", "DynamicLin
 /// The grobs that are moved: `extra-offset`, `X-offset`, `Y-offset`.
 const MOVED: [&str; 6] = ["TextScript", "DynamicText", "Script", "RehearsalMark", "MetronomeMark", "Fingering"];
 
+/// The curves and wedges `extra-offset` moves whole, from where they were
+/// put (`X-offset` and `Y-offset` are not theirs).
+const SHIFTED: [&str; 4] = ["Slur", "PhrasingSlur", "Tie", "Hairpin"];
+
 /// The grobs kept off what is around them: `padding`, `outside-staff-padding`,
 /// `staff-padding`.
 const PADDED: [&str; 7] = ["TextScript", "DynamicText", "DynamicLineSpanner", "Script", "RehearsalMark", "MetronomeMark", "Fingering"];
@@ -279,7 +283,10 @@ fn honoured(key: &str, v: &Val) -> bool {
     let Some((grob, prop)) = key.split_once('.') else { return false };
     match prop {
         "direction" => DIRECTED.contains(&grob) && matches!(v, Val::Num(_)),
-        "extra-offset" => MOVED.contains(&grob) && matches!(v, Val::Pair(..)),
+        "extra-offset" => (MOVED.contains(&grob) || SHIFTED.contains(&grob)) && matches!(v, Val::Pair(..)),
+        // A hairpin's ends drawn in from where they stand, and how far it opens.
+        "shorten-pair" => grob == "Hairpin" && matches!(v, Val::Pair(..)),
+        "height" => grob == "Hairpin" && matches!(v, Val::Num(n) if *n > 0.0 && *n <= 4.0),
         "X-offset" | "Y-offset" => MOVED.contains(&grob) && matches!(v, Val::Num(_)),
         "padding" | "outside-staff-padding" | "staff-padding" => PADDED.contains(&grob) && matches!(v, Val::Num(_)),
         "self-alignment-X" => ALIGNED.contains(&grob) && matches!(v, Val::Num(_)),
@@ -526,7 +533,7 @@ fn factor(d: &Sx) -> Option<f64> {
 fn value_for(key: &str, d: &Sx) -> Option<Val> {
     let prop = key.rsplit('.').next().unwrap_or(key);
     Some(match prop {
-        "extra-offset" | "positions" => match d {
+        "extra-offset" | "positions" | "shorten-pair" => match d {
             Sx::Pair(a, b) => Val::Pair(as_num(a)?, as_num(b)?),
             Sx::List(items) => match items.as_slice() {
                 [Sx::Word(f), a, b] if f == "cons" => Val::Pair(as_num(a)?, as_num(b)?),
@@ -1059,6 +1066,7 @@ fn tweaked(toks: &[Tok], mut k: usize) -> Option<&'static str> {
         T::Cmd if crate::parse::DYNAMICS.contains(&t.v.as_str()) => "DynamicText",
         T::Cmd if crate::parse::SCRIPTS.contains(&t.v.as_str()) => "Script",
         T::Cmd if t.v == "(" => "PhrasingSlur",
+        T::Cmd if ["<", ">", "cresc", "dim", "decresc"].contains(&t.v.as_str()) => "Hairpin",
         T::Cmd if t.v == "mark" => "RehearsalMark",
         T::Sym('.' | '>' | '!') => "Script",
         T::Sym('(') => "Slur",

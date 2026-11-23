@@ -1312,7 +1312,7 @@ fn draw_dynamic(pen: &mut Pen, dy: &DynEl, top: f64) {
         dashes(pen, x, dy.x1, top + dy.y);
         return;
     }
-    let h = 0.6666;
+    let h = dy.open;
     let grows = dy.grow == '<';
     let open_a = if grows { dy.from } else { 1.0 - dy.from };
     let open_b = if grows { dy.to } else { 1.0 - dy.to };

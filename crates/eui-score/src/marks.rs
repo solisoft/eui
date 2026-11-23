@@ -171,7 +171,42 @@ pub struct DynEl {
     pub bottom: f64,
     /// Its line.
     pub y: f64,
+    /// For a wedge, how far each of its lines stands from `y` where it is
+    /// open: LilyPond's `Hairpin.height`, two thirds of a space.
+    pub open: f64,
+    /// The note or rest it is written on — a hairpin's, the one it starts
+    /// on: its number among its staff's items ([`Ev::i`]).
+    pub item: usize,
+    /// Where that one is written: its character in the source ([`Ev::at`]).
+    pub at: usize,
+    /// For a hairpin a line break parts, which piece this is, from 0.
+    pub piece: usize,
 }
+
+impl DynEl {
+    /// Its ink's box, `[left, top, right, bottom]` in its line's frame: a
+    /// dynamic's letters, a wedge at its widest, or a `\cresc`'s words and
+    /// dashes.
+    pub fn bbox(&self) -> [f64; 4] {
+        if let Some(text) = &self.text {
+            let (mut top, mut bottom) = (0.0_f64, 0.0_f64);
+            for name in dyn_letters(text) {
+                let bb = glyph(name).bbox;
+                top = top.min(bb[1]);
+                bottom = bottom.max(bb[3]);
+            }
+            return [self.x0, self.y + 0.6 + top, self.x1, self.y + 0.6 + bottom];
+        }
+        if self.words.is_some() {
+            return [self.x0, self.y - 0.6, self.x1, self.y + 0.45];
+        }
+        [self.x0, self.y - self.open, self.x1, self.y + self.open]
+    }
+}
+
+/// A hairpin's half opening where nothing sets it: LilyPond's
+/// `Hairpin.height`.
+pub(crate) const HAIRPIN_OPEN: f64 = 0.6666;
 
 /// Words over or under the notes.
 #[derive(Debug, Clone)]
@@ -247,6 +282,12 @@ pub struct HairpinPiece {
     pub words: Option<String>,
     /// The layout settings of the note it starts on.
     pub look: crate::look::Look,
+    /// The note or rest it starts on: its number among its staff's items.
+    pub item: usize,
+    /// Where that one is written: its character in the source.
+    pub at: usize,
+    /// Which piece of the hairpin it is, from 0.
+    pub piece: usize,
 }
 
 /// A tie, a slur or a phrasing slur as it is drawn on a line: the curve of
@@ -922,11 +963,17 @@ pub(crate) fn bezier(p: &[(f64, f64); 4], t: f64) -> (f64, f64) {
     (a * p[0].0 + b * p[1].0 + c * p[2].0 + d * p[3].0, a * p[0].1 + b * p[1].1 + c * p[2].1 + d * p[3].1)
 }
 
-/// A curve's control points moved as `\shape` says for this piece of it:
-/// each by its offset, up for a positive `dy`.
+/// A curve's control points moved as its note's settings say: all by its
+/// `extra-offset`, and each by `\shape`'s offset for this piece of it, up
+/// for a positive `dy`.
 fn shaped(points: [(f64, f64); 4], look: &crate::look::Look, grob: &str, piece: usize) -> [(f64, f64); 4] {
-    let Some(by) = look.shape(grob, piece) else { return points };
-    [0, 1, 2, 3].map(|k| (points[k].0 + by[k].0, points[k].1 - by[k].1))
+    // `extra-offset` moves the whole curve, `\shape` each of its points.
+    let (dx, dy) = look.extra(grob);
+    let by = look.shape(grob, piece).unwrap_or([(0.0, 0.0); 4]);
+    if (dx, dy) == (0.0, 0.0) && by == [(0.0, 0.0); 4] {
+        return points;
+    }
+    [0, 1, 2, 3].map(|k| (points[k].0 + by[k].0 + dx, points[k].1 - by[k].1 + dy))
 }
 
 /// A tie: LilyPond's height for its width; `look` its note's settings.
@@ -1835,7 +1882,17 @@ fn hairpins(bars: &[Bar], lines: &mut [Line]) {
             let ka = (si - first) as f64 / parts;
             let kb = (si - first + 1) as f64 / parts;
             let words = start_ev.hairpin_text.as_ref().map(|w| if si == first { w.clone() } else { String::new() });
-            line.hairpins.push(HairpinPiece { x0: a, x1: b.max(a + 2.0), grow, from: ka, to: kb, words, look: start_ev.look.clone() });
+            // `shorten-pair`: each end drawn in by so much (out, for a
+            // negative one), on the piece that holds it.
+            let (cut_a, cut_b) = start_ev.look.pair("Hairpin.shorten-pair").unwrap_or((0.0, 0.0));
+            let (mut a, mut b) = (a, b.max(a + 2.0));
+            if si == first {
+                a += cut_a;
+            }
+            if si == last {
+                b = (b - cut_b).max(a + 0.5);
+            }
+            line.hairpins.push(HairpinPiece { x0: a, x1: b, grow, from: ka, to: kb, words, look: start_ev.look.clone(), item: start_ev.i, at: start_ev.at, piece: si - first });
         }
     }
 }
@@ -1896,11 +1953,28 @@ fn dynamics(bars: &[Bar], line: &mut Line) {
                 top = top.min(bb[1]);
                 bottom = bottom.max(bb[3]);
             }
-            els.push((DynEl { text: Some(d.clone()), x0: x, x1: x + dyn_width(d), top: 0.6 + top, bottom: 0.6 + bottom, ..DynEl::default() }, ev.look.clone()));
+            els.push((DynEl { text: Some(d.clone()), x0: x, x1: x + dyn_width(d), top: 0.6 + top, bottom: 0.6 + bottom, item: ev.i, at: ev.at, ..DynEl::default() }, ev.look.clone()));
         }
     }
     for hp in &line.hairpins {
-        els.push((DynEl { text: None, words: hp.words.clone(), x0: hp.x0, x1: hp.x1, grow: hp.grow, from: hp.from, to: hp.to, top: -0.6666, bottom: 0.6666, y: 0.0 }, hp.look.clone()));
+        let open = hp.look.num("Hairpin.height").unwrap_or(HAIRPIN_OPEN);
+        let el = DynEl {
+            text: None,
+            words: hp.words.clone(),
+            x0: hp.x0,
+            x1: hp.x1,
+            grow: hp.grow,
+            from: hp.from,
+            to: hp.to,
+            top: -open,
+            bottom: open,
+            y: 0.0,
+            open,
+            item: hp.item,
+            at: hp.at,
+            piece: hp.piece,
+        };
+        els.push((el, hp.look.clone()));
     }
     els.sort_by(|a, b| a.0.x0.total_cmp(&b.0.x0));
     line.dynamics = Vec::new();
@@ -1935,6 +2009,13 @@ fn dynamics(bars: &[Bar], line: &mut Line) {
                     el.x0 += dx;
                     el.x1 += dx;
                     el.y += dy;
+                } else {
+                    // A hairpin, wedge or words: moved whole by its `extra-offset`.
+                    let (dx, dy) = look.extra("Hairpin");
+                    el.x0 += dx;
+                    el.x1 += dx;
+                    el.y += dy;
+                    el.bottom += dy;
                 }
                 line.dynamics.push(el);
             }
@@ -1960,7 +2041,7 @@ fn dyn_line(bars: &[Bar], line: &Line, el: &DynEl, pads: (f64, f64)) -> f64 {
                 if el.grow == '>' {
                     open = 1.0 - open;
                 }
-                rise = 0.6666 * open;
+                rise = el.open * open;
             }
             need = need.max(ev.reach_down.unwrap_or(4.0) + pad + rise);
         }
@@ -1973,7 +2054,7 @@ fn dyn_line(bars: &[Bar], line: &Line, el: &DynEl, pads: (f64, f64)) -> f64 {
     }
     // A slur or a tie under the notes: the dynamics go under it, not over
     // it — a hairpin under a run slurred below used to sit on the slur.
-    let open = if el.text.is_none() && el.words.is_none() { 0.6666 } else { -el.top };
+    let open = if el.text.is_none() && el.words.is_none() { el.open } else { -el.top };
     for curve in &line.curves {
         if let Some(low) = curve_low(curve, el.x0 - 0.2, el.x1 + 0.2) {
             need = need.max(low + pad + open);
