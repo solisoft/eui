@@ -255,6 +255,28 @@ fn play(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, sounding: &mut Vec<(i64, Sounding
             length = length.min(from);
         }
     }
+    if ev.trem_beams > 0 && span > 0 {
+        // `\repeat tremolo 4 { c16 e }`: the two notes in turn, each its
+        // written value, over the time both take — the first on the even
+        // turns from its start, the second on the odd ones from the first's.
+        let each = (WHOLE / (4 << ev.trem_beams)).clamp(1, span);
+        let from = if ev.trem_first { t0 } else { t0 - span };
+        let mut t = from;
+        let mut turn = 0;
+        while t < from + 2 * span {
+            let len = each.min(from + 2 * span - t);
+            if (turn % 2 == 0) == ev.trem_first {
+                for &(d, alter) in &heads {
+                    let key = key_of(d, alter);
+                    ev_out.push((t, 1, vec![(144 + channel) as u8, key as u8, vel]));
+                    ev_out.push((t + len, 0, vec![(128 + channel) as u8, key as u8, 64]));
+                }
+            }
+            t += each;
+            turn += 1;
+        }
+        return;
+    }
     if ev.tremolo > 0 {
         // `c4:16`: the note again each sixteenth of it.
         let each = (WHOLE / ev.tremolo).max(1);

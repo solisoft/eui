@@ -7,8 +7,8 @@ use std::cell::{Cell, RefCell};
 use std::ops::Range;
 
 use crate::engrave::{
-    acc_name, barline_parts, barline_width, beam_y, church_width, clef_glyph, digits, flag_name, flags, head_name, key_cancel, part_width, rest_name, stem_x, time_glyph, time_width, y_of, Courtesy,
-    Engraved, Line, System, GRACE_K,
+    acc_name, barline_parts, barline_width, beam_levels, beam_y, church_width, clef_glyph, digits, flag_name, flags, head_name, key_cancel, part_width, rest_name, stem_x, time_glyph, time_width,
+    y_of, Courtesy, Engraved, Line, System, GRACE_K,
 };
 use crate::glyphs::{glyph, letters, Weight};
 use crate::marks::{dyn_letters, figure_width, glyph_run_w, mark_em, ottava_em, rest_lift, run_em, verse_gap, voice_of, DynEl, MarkPlace, OttavaPlace, TempoMark, TupletPlace, Volta};
@@ -1726,17 +1726,20 @@ fn draw_beam(pen: &mut Pen, bar: &Bar, g: &Beam, top: f64) {
         let off = level as f64 * RULE.beam_step * k * dir;
         let mut i = 0;
         while i < notes.len() {
-            if flags(notes[i].base) <= level {
+            if beam_levels(notes[i]) <= level {
                 i += 1;
                 continue;
             }
             let mut jj = i;
-            while jj + 1 < notes.len() && flags(notes[jj + 1].base) > level && !breaks(jj + 1, level) {
+            while jj + 1 < notes.len() && beam_levels(notes[jj + 1]) > level && !breaks(jj + 1, level) {
                 jj += 1;
             }
             let mut xa = stem_x(notes[i]) - if g.up { RULE.stem } else { 0.0 };
             let mut xb = stem_x(notes[jj]) + if g.up { 0.0 } else { RULE.stem };
-            if i == jj {
+            if let Some((ga, gb)) = tremolo_gap(notes[i], notes[jj], level) {
+                xa = ga;
+                xb = gb;
+            } else if i == jj {
                 let stub = 1.1;
                 // Of a subdivided group, a stub points into its own group.
                 let group_start = sub.is_some() && breaks(i, level);
@@ -1755,6 +1758,23 @@ fn draw_beam(pen: &mut Pen, bar: &Bar, g: &Beam, top: f64) {
             i = jj + 1;
         }
     }
+}
+
+/// How far a two-note tremolo's beams keep from the stems, as LilyPond's
+/// `Beam.gap`: under `\repeat tremolo`, a half note's beams stop short of
+/// its stems — only a beam its value has reaches them — and a whole note's,
+/// which has none, go from head to head (score #1026). Where the beam at
+/// `level` between `a` and `b` starts and ends, or none for a beam drawn
+/// to the stems.
+fn tremolo_gap(a: &Ev, b: &Ev, level: i64) -> Option<(f64, f64)> {
+    const GAP: f64 = 0.8;
+    if a.trem_beams == 0 || b.trem_beams == 0 || a.base > 2 || level < flags(a.base) {
+        return None;
+    }
+    if a.base == 1 {
+        return Some((a.x + a.head_w.unwrap_or(0.0) + GAP / 2.0, b.x - GAP / 2.0));
+    }
+    Some((stem_x(a) + GAP, stem_x(b) - GAP))
 }
 
 /// The percent sign of a bar `\repeat percent` copies, in the middle of

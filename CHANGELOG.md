@@ -171,6 +171,12 @@ release. A wire change lands here first, is released, and then the pin moves.
   the sign says — and `\arpeggioParenthesis`, a curve like a slur's, the
   chord rolled; `\arpeggioNormal` goes back to the wavy line. They were
   passed over with a warning.
+- A score reads two-note tremolos, `\repeat tremolo 8 { c16 e }`, which
+  were refused (score #1026): each note drawn as long as the whole tremolo
+  — two whole notes there, two halves for `\repeat tremolo 4` — the written
+  value's beams between them, short of a half note's stems, and the two
+  notes played in turn in sixteenths. `\repeat tremolo 4 c16`, one note,
+  is `c4:16`.
 
 ### Fixed
 

@@ -131,3 +131,103 @@ fn a_bracketed_chord_is_played_together_and_a_parenthesis_rolled() {
     let rolled = played(r"{ \arpeggioParenthesis <c' e' g'>4\arpeggio }");
     assert_eq!(rolled.iter().map(|n| n.1).collect::<Vec<_>>(), vec![0, q / 16, q / 8]);
 }
+
+// ---- Two-note tremolos -------------------------------------------------------
+
+/// The widths of the beams drawn on the first page: the outlines of four
+/// straight sides.
+fn beam_strokes(e: &Engraved) -> Vec<f64> {
+    let (all, _) = paths(e, 8.0, 0).unwrap();
+    all.iter()
+        .filter_map(|p| match p {
+            Path::Fill(c) if c.len() == 13 && c[0] == 0.0 && c[3] == 1.0 && c[6] == 1.0 && c[9] == 1.0 && c[12] == 4.0 && (c[1] - c[10]).abs() < 1e-6 => Some(c[4] - c[1]),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_tremolo_of_two_notes_draws_each_as_long_as_the_whole() {
+    // Eight times two sixteenths: a whole bar, two whole notes.
+    let p = parse(r"{ \repeat tremolo 8 { c'16 e' } }").unwrap();
+    let notes: Vec<&Ev> = p.staves[0].events.iter().filter(|e| e.k == Kind::Note).collect();
+    assert_eq!(notes.len(), 2);
+    assert_eq!((notes[0].base, notes[1].base), (1, 1), "drawn as whole notes");
+    assert_eq!(notes[0].ticks + notes[1].ticks, eui_score::WHOLE, "a bar between them");
+    assert_eq!((notes[0].trem_beams, notes[0].trem_first, notes[1].trem_first), (2, true, false), "a sixteenth's two beams");
+    // Four times: two halves; two eighths alternating twice: two quarters, one beam.
+    let halves = parse(r"{ \repeat tremolo 4 { c'16 e' } }").unwrap();
+    assert!(halves.staves[0].events.iter().filter(|e| e.k == Kind::Note).all(|e| e.base == 2));
+    let quarters = parse(r"{ \repeat tremolo 2 { c'16 e' } }").unwrap();
+    assert!(quarters.staves[0].events.iter().filter(|e| e.k == Kind::Note).all(|e| e.base == 4 && e.trem_beams == 2));
+    let eighths = parse(r"{ \repeat tremolo 2 { c'8 e' } }").unwrap();
+    assert!(eighths.staves[0].events.iter().filter(|e| e.k == Kind::Note).all(|e| e.base == 2 && e.trem_beams == 1), "halves, one beam");
+    // One note is a tremolo of its own: `c'4:16`.
+    let one = parse(r"{ \repeat tremolo 4 c'16 }").unwrap();
+    let c = one.staves[0].events.iter().find(|e| e.k == Kind::Note).unwrap();
+    assert_eq!((c.base, c.tremolo, c.trem_beams), (4, 16, 0));
+}
+
+#[test]
+fn a_tremolo_that_is_not_one_is_refused() {
+    for src in [
+        r"{ \repeat tremolo 4 { c'16 e' g' } }",
+        r"{ \repeat tremolo 4 { c'16 e'8 } }",
+        r"{ \repeat tremolo 3 { c'16 e' } }",
+        r"{ \repeat tremolo 4 { c'4 e' } }",
+        r"{ \repeat tremolo 32 { c'16 e' } }",
+        r"{ \repeat tremolo 4 { c'16 r } }",
+        r"{ \repeat tremolo 4 { c'16. e' } }",
+    ] {
+        let err = parse(src).err().unwrap_or_else(|| panic!("{src}: read"));
+        assert!(err.message.contains("\\repeat tremolo"), "{src}: {}", err.message);
+    }
+}
+
+#[test]
+fn the_two_notes_are_beamed_together_with_the_written_beams() {
+    for (src, n) in
+        [(r"{ \repeat tremolo 4 { c''16 a' } r2 }", 2), (r"{ \repeat tremolo 2 { c''8 a' } r2. }", 1), (r"{ \repeat tremolo 2 { c''32 a' } r4. }", 3), (r"{ \repeat tremolo 8 { c''16 a' } }", 2)]
+    {
+        let e = eng(src);
+        let bar = &e.staves[0][0];
+        assert_eq!(bar.beams.len(), 1, "{src}");
+        assert_eq!((bar.beams[0].notes.len(), bar.beams[0].n), (2, n), "{src}");
+        assert!(bar.items[0].up == bar.items[1].up, "{src}: one direction");
+    }
+    // Between halves the beams stop short of the stems, 0.8 space from
+    // each (LilyPond's Beam.gap); between quarters they reach them.
+    for (src, short) in [(r"{ \repeat tremolo 4 { c''16 a' } r2 }", true), (r"{ \repeat tremolo 2 { c''16 a' } r2. }", false)] {
+        let e = eng(src);
+        let g = &e.staves[0][0].beams[0];
+        let strokes = beam_strokes(&e);
+        assert_eq!(strokes.len(), 2, "{src}");
+        for w in strokes {
+            let between = (g.x1 - g.x0) * 8.0;
+            if short {
+                assert!((w - (between - 1.6 * 8.0)).abs() < 0.5, "{src}: {w} against {between}");
+            } else {
+                assert!(w > between, "{src}: {w} against {between}");
+            }
+        }
+    }
+    // Next to them, notes beam as before: the tremolo is no part of their beam.
+    let e = eng(r"{ c''8 d'' \repeat tremolo 2 { c''16 a' } e''8 f'' r2 }");
+    let groups: Vec<usize> = e.staves[0][0].beams.iter().map(|g| g.notes.len()).collect();
+    assert_eq!(groups, vec![2, 2, 2]);
+    // Cut by a bar line, the notes are what they sound, tied, and the beam
+    // goes; the music after it is beamed as ever.
+    let e = eng(r"{ r2.. \repeat tremolo 4 { c''16 a' } c''8 d'' r2 }");
+    assert!(e.staves[0].iter().all(|b| b.beams.iter().all(|g| g.notes.iter().all(|&j| b.items[j].trem_beams == 0))), "no tremolo beam");
+    played(r"{ r2.. \repeat tremolo 4 { c''16 a' } c''8 d'' r2 }");
+}
+
+#[test]
+fn the_two_notes_are_played_in_turn_in_the_written_value() {
+    let q = quarter(r"{ c'4 }");
+    let all = played(r"{ \repeat tremolo 4 { c'16 e' } c'4 }");
+    let keys: Vec<u8> = all.iter().map(|n| n.0).collect();
+    assert_eq!(keys, vec![60, 64, 60, 64, 60, 64, 60, 64, 60]);
+    assert!(all[..8].iter().enumerate().all(|(k, n)| n.1 == k as u32 * q / 4 && n.2 == n.1 + q / 4), "sixteenths back to back: {all:?}");
+    assert_eq!(all[8].1, 2 * q, "the next note after the half note's time");
+}

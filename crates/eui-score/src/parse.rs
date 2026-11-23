@@ -1157,6 +1157,12 @@ pub struct Ev {
     pub pedal_off: bool,
     /// `c4:16`: the note repeated in sixteenths, strokes across its stem.
     pub tremolo: i64,
+    /// `\repeat tremolo 4 { c16 e }` (score #1026): one of the two notes
+    /// that alternate, each drawn as long as the two share (here a quarter)
+    /// and beamed to the other with the written notes' beams — this many.
+    pub trem_beams: i64,
+    /// … and it is the first of the two.
+    pub trem_first: bool,
     /// `\ottava`'s octaves where the note stands; on `Kind::Ottava`, the new
     /// ones.
     pub ottava: i64,
@@ -5149,9 +5155,12 @@ fn repeat(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>)
         }
         return unfold(toks, i, st, hd, count, kind == "percent");
     }
+    if kind == "tremolo" && counted && (starts_expr(toks, i + 3) || is(toks, i + 3, T::Word)) {
+        return tremolo_repeat(toks, i, st, hd);
+    }
     let ok = i + 3 < toks.len() && kind == "volta" && counted && toks[i + 3].t == T::Sym('{');
     if !ok {
-        return refuse("\\repeat wants volta, unfold or percent, a count and a { block } — the others are not drawn", tk.at);
+        return refuse("\\repeat wants volta, unfold, percent or tremolo, a count and a { block } — the others are not drawn", tk.at);
     }
     st.events.push(Ev { k: Kind::RepeatStart, at: tk.at, ..Ev::default() });
     let alts_before = st.alts;
@@ -5166,6 +5175,55 @@ fn repeat(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>)
     if st.alts == alts_before {
         st.events.push(Ev { k: Kind::RepeatEnd, at: tk.at, ..Ev::default() });
     }
+    Ok(j)
+}
+
+/// `\repeat tremolo n { c16 e }` (score #1026), as LilyPond reads it: two
+/// notes of one value alternating `n` times, each drawn as long as the
+/// whole tremolo — two whole notes for `\repeat tremolo 8 { c16 e }`, a
+/// bar of 4/4 — with the written value's beams between them; and
+/// `\repeat tremolo 4 c16`, one note, is `c4:16`.
+fn tremolo_repeat(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+    let tk = toks[i].clone();
+    let count: i64 = toks[i + 2].v.parse().unwrap_or(0);
+    let before = st.events.len();
+    let j = expr(toks, i + 3, st, hd)?;
+    let notes: Vec<usize> = (before..st.events.len()).filter(|&k| matches!(st.events[k].k, Kind::Note | Kind::Rest)).collect();
+    let wrong = |what: &str| refuse(format!("\\repeat tremolo {what}"), tk.at);
+    if notes.is_empty() || notes.len() > 2 || notes.iter().any(|&k| st.events[k].k != Kind::Note) {
+        return wrong("repeats one note or alternates two: { c16 e }");
+    }
+    let first = &st.events[notes[0]];
+    let (base, dots) = (first.base, first.dots);
+    if notes.iter().any(|&k| {
+        let ev = &st.events[k];
+        ev.base != base || ev.dots != dots || ev.tuplet.is_some() || ev.tremolo > 0 || !ev.graces.is_empty() || !ev.after_graces.is_empty()
+    }) {
+        return wrong("alternates two plain notes of one value");
+    }
+    // Each note is drawn as long as all of them together, as LilyPond's
+    // `make-repeat` shifts it: two sixteenths eight times, a whole bar, are
+    // two whole notes; each sounds its share.
+    let drawn_as = count * notes.len() as i64;
+    if count < 2 || drawn_as.count_ones() != 1 || base % drawn_as != 0 || base < 8 || dots > 0 {
+        return wrong("is counted 2, 4, 8 … times, its notes undotted eighths or shorter, and drawn as no longer than a whole note");
+    }
+    let shown = base / drawn_as;
+    for &k in &notes {
+        let ev = &mut st.events[k];
+        ev.base = shown;
+        ev.ticks *= count;
+    }
+    if let [one] = notes[..] {
+        st.events[one].tremolo = base;
+    } else {
+        for (n, &k) in notes.iter().enumerate() {
+            let ev = &mut st.events[k];
+            ev.trem_beams = crate::engrave::flags(base);
+            ev.trem_first = n == 0;
+        }
+    }
+    beyond();
     Ok(j)
 }
 

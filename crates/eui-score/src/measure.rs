@@ -250,6 +250,10 @@ fn cut_at_bar_lines(ev: &Ev, room: i64, length: i64) -> Option<Vec<Ev>> {
             piece.base = base;
             piece.dots = dots;
             piece.ticks = ticks;
+            // A two-note tremolo's note cut at a bar line is tied notes
+            // as long as it sounds, held (score #1026).
+            piece.trem_beams = 0;
+            piece.trem_first = false;
             out.push(piece);
         }
     }

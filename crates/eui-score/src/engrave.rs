@@ -248,6 +248,16 @@ pub(crate) fn y_of(pos: i64) -> f64 {
 
 // ---- Stems and beams --------------------------------------------------
 
+/// The beams a beamed note has: its flags, or under `\repeat tremolo` the
+/// written notes' (score #1026).
+pub(crate) fn beam_levels(ev: &Ev) -> i64 {
+    if ev.trem_beams > 0 {
+        ev.trem_beams
+    } else {
+        flags(ev.base)
+    }
+}
+
 pub(crate) fn flags(base: i64) -> i64 {
     match base {
         8 => 1,
@@ -415,6 +425,24 @@ pub(crate) fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64), bounds: Op
             let ev = &bar.items[j];
             let gap = last_end >= 0 && ev.start != last_end;
             last_end = ev.start + ev.ticks;
+            // `\repeat tremolo`'s two notes: a beam of their own.
+            if ev.k == Kind::Note && ev.trem_beams > 0 && !ev.xbeam {
+                let pair = !ev.trem_first && cur.len() == 1 && cur.first().is_some_and(|&f| bar.items[f].trem_first);
+                if pair {
+                    cur.push(j);
+                    groups.push(std::mem::take(&mut cur));
+                } else {
+                    if !cur.is_empty() {
+                        groups.push(std::mem::take(&mut cur));
+                    }
+                    if ev.trem_first {
+                        cur.push(j);
+                    }
+                }
+                manual = false;
+                win = -1;
+                continue;
+            }
             // A note under a beam that crosses the staves is the system's to beam.
             let fl = if ev.k == Kind::Note && !ev.xbeam { flags(ev.base) } else { 0 };
             if manual {
@@ -455,7 +483,7 @@ pub(crate) fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64), bounds: Op
         }
         let mut by_beat: Vec<Vec<usize>> = Vec::new();
         for g in groups {
-            let short = g.iter().any(|&j| flags(bar.items[j].base) > 1 || bar.items[j].tuplet.is_some());
+            let short = g.iter().any(|&j| flags(bar.items[j].base) > 1 || bar.items[j].tuplet.is_some()) && bar.items[g[0]].trem_beams == 0;
             if g.len() > 1 && short && !bar.items[g[0]].beam_on {
                 let mut part: Vec<usize> = Vec::new();
                 let mut pw = -1;
@@ -527,6 +555,11 @@ pub(crate) fn shortest<'a>(bars: impl Iterator<Item = &'a Bar>) -> i64 {
 }
 
 fn space_ticks(ev: &Ev) -> i64 {
+    // A two-note tremolo's notes are drawn twice as long as they sound:
+    // spaced as they sound.
+    if ev.trem_beams > 0 {
+        return ev.ticks.max(1);
+    }
     let mut t = WHOLE / ev.base.max(1);
     for tp in [ev.tuplet, ev.tuplet_outer].into_iter().flatten() {
         t = t * tp.d / tp.n;
@@ -1865,7 +1898,7 @@ pub(crate) fn stem_x(ev: &Ev) -> f64 {
 fn beam(bar: &mut Bar, gi: usize, placed: &[bool]) {
     let notes = bar.beams[gi].notes.clone();
     let up = bar.beams[gi].up;
-    let n_beams = notes.iter().fold(0, |acc, &j| acc.max(flags(bar.items[j].base))).max(1);
+    let n_beams = notes.iter().fold(0, |acc, &j| acc.max(beam_levels(&bar.items[j]))).max(1);
     let k = notes.first().map_or(1.0, |&j| mag(&bar.items[j]));
     let thick = RULE.beam * k;
     let step = RULE.beam_step * k;
@@ -1881,7 +1914,7 @@ fn beam(bar: &mut Bar, gi: usize, placed: &[bool]) {
         .collect();
     let look = notes.first().map(|&j| bar.items[j].look.clone()).unwrap_or_default();
     let obstacles = beam_obstacles(bar, gi, placed);
-    let edge = |j: usize| flags(bar.items[j].base).max(1);
+    let edge = |j: usize| beam_levels(&bar.items[j]).max(1);
     let spec = crate::quanting::QBeam {
         count: n_beams,
         edge_counts: (edge(notes[0]), edge(notes[notes.len() - 1])),
