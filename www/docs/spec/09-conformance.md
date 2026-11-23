@@ -1157,6 +1157,19 @@ version 7) and a margin.
   a change in one voice is the staff's at that moment, another staff and
   a drum staff untouched
   (`a_change_in_one_voice_is_the_staffs_at_that_moment`).
+- **The room around titles and words is `\paper`'s** (03 §1.4; score
+  #1025), in `crates/eui-score/tests/markup_spacing.rs`: the three
+  spacings are read, with no warning
+  (`the_three_spacings_are_read_and_no_longer_passed_over`); the titles
+  and the music under them move by `top-markup-spacing`
+  (`the_titles_stand_as_far_from_the_top_as_top_markup_spacing_says`);
+  the words start `score-markup-spacing` under the last staff's middle
+  line, clear of its ink
+  (`the_words_stand_under_the_music_as_score_markup_spacing_says`); a
+  block follows the one before by `markup-markup-spacing`
+  (`a_block_of_words_follows_the_one_before_as_markup_markup_spacing_says`);
+  on a page nearly full the words come nearer the music
+  (`words_a_page_has_no_room_for_come_nearer_the_music_before_they_leave_it`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11

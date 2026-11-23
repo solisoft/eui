@@ -127,6 +127,15 @@ pub(crate) struct Opts {
     pub top: Spec,
     /// `last-bottom-spacing`, from the last system to the bottom margin.
     pub bottom: Spec,
+    /// `top-markup-spacing`, from the top of a page to the titles or the
+    /// words it starts with (score #1025).
+    pub top_markup: Spec,
+    /// `markup-markup-spacing`, from one block of words after the music to
+    /// the next: top to top.
+    pub markup_markup: Spec,
+    /// `score-markup-spacing`, from the last system's staff's middle line
+    /// to the top of the words after it.
+    pub score_markup: Spec,
     /// `max-systems-per-page`.
     pub max_per_page: Option<usize>,
     /// `page-count`.
@@ -138,7 +147,25 @@ pub(crate) struct Opts {
     pub minimal: bool,
 }
 
+/// LilyPond's `top-markup-spacing`.
+const TOP_MARKUP: Spec = Spec::new(0.0, 0.0, 1.0, None);
+
+/// How far a spacing holds two things apart when nothing stretches or
+/// squeezes it and no ink is in the way: its basic distance, or its least
+/// where that is the greater.
+pub(crate) fn rest_length(spec: &Spec) -> f64 {
+    spec.basic.max(spec.min)
+}
+
 impl Opts {
+    /// How much lower than LilyPond's own `top-markup-spacing` puts them
+    /// the titles — or the words a page starts with — stand: their top is
+    /// the spacing's distance under the page's top, its padding at least
+    /// (LilyPond's own: a space).
+    pub(crate) fn top_markup_drop(&self) -> f64 {
+        rest_length(&self.top_markup).max(self.top_markup.padding) - rest_length(&TOP_MARKUP).max(TOP_MARKUP.padding)
+    }
+
     /// Out of a layout and the source's `\paper`: on paper, its lengths in
     /// staff spaces at the staff size; on a screen, what shapes the lines
     /// and the space between them.
@@ -159,6 +186,9 @@ impl Opts {
             markup: Spec::new(5.0, 0.0, 0.5, Some(30.0)).over(&spec.markup_spacing),
             top: Spec::new(1.0, 0.0, 1.0, None).over(&spec.top_spacing),
             bottom: Spec::new(1.0, 0.0, 1.0, Some(30.0)).over(&spec.last_bottom_spacing),
+            top_markup: TOP_MARKUP.over(&spec.top_markup_spacing),
+            markup_markup: Spec::new(1.0, 0.0, 0.5, None).over(&spec.markup_markup_spacing),
+            score_markup: Spec::new(12.0, 0.0, 0.5, Some(60.0)).over(&spec.score_markup_spacing),
             max_per_page: spec.max_systems_per_page,
             page_count: spec.page_count,
             system_count: spec.system_count,

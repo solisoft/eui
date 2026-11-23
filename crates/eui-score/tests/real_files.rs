@@ -78,9 +78,6 @@ fn le_grand_cerf_opens_as_it_is() {
         vec![
             "the header field 'img' is not one a title page prints",
             "\\epsfile: a picture in a \\markup is not drawn",
-            "\\paper's score-markup-spacing is not read",
-            "\\paper's markup-markup-spacing is not read",
-            "\\paper's top-markup-spacing is not read",
             "\\set Score.barNumberVisibility is not drawn",
             "\\override MetronomeMark.stencil in \\layout is not drawn",
             "\\override LyricText.font-name in \\layout is not drawn",
@@ -256,9 +253,10 @@ fn words_after_the_music_are_set_under_it() {
         paths(&paged, 5.0, page).unwrap();
     }
     assert!(pdf(&long, "t").unwrap().starts_with("%PDF"));
-    // Words on one line, and two blocks, an empty line between them.
+    // Words on one line, and two blocks, the second from its own line on.
     assert_eq!(read("{ c'1 } \\markup \\bold \"Fin\"").after_words, ["Fin"]);
-    assert_eq!(read("{ c'1 } \\markup { one \\italic two } \\markup { \\line { three four } }").after_words, ["one two", "", "three four"]);
+    let two = read("{ c'1 } \\markup { one \\italic two } \\markup { \\line { three four } }");
+    assert_eq!((two.after_words, two.after_blocks), (vec!["one two".to_owned(), "three four".to_owned()], vec![1]));
     // Before the music, or between two scores, they are still passed over.
     for src in ["\\markup { \"Preface\" } { c'1 }", "\\score { { c'1 } } \\markup { \"Interlude\" } \\score { { d'1 } }"] {
         assert!(read(src).after_words.is_empty(), "{src}");

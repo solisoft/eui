@@ -642,6 +642,24 @@ construct as LilyPond 2.25 draws it:
   spaces from baseline to baseline, a line the page has no room for on
   the next; its fonts, sizes and spaces are not read, and one before the
   music or between two scores is passed over with a warning.
+  The room around what is not music is `\paper`'s (score #1025), each
+  spacing by its `basic-distance`, its `minimum-distance` where that is
+  the greater, and its `padding`, measured as LilyPond measures them — a
+  system from the middle line of its staff, a title or a block of words
+  from its top (a line's ink 0.72 em over its baseline, 0.25 under).
+  `top-markup-spacing` (0, 0, padding 1): the titles' top stands the
+  distance, the padding at least, under the top of the page — against
+  LilyPond's own, a greater one lowers the titles and the music under
+  them by the difference — and so do words a page starts with.
+  `score-markup-spacing` (12, 0, padding 0.5): the first block's top
+  stands the distance under the middle line of the last system's last
+  staff, the padding at least under its ink; on a page with no room for
+  the words that far down, as near the music as lets them end at the
+  page's foot, the padding and the least distance kept. Each `\markup`
+  after the first is a block: `markup-markup-spacing` (1, 0, padding
+  0.5) from the top of the one before to its own, the padding under that
+  one's last line. `stretchability` is not read for these three: the
+  words are not spread down a page.
 
 - *Real files* (score #359): layout settings — `\override`, `\revert`,
   `\once`, `\tweak`, `\set`, `\unset`, the direction and style switches,

@@ -87,6 +87,26 @@ pub struct HeadBlock {
     pub bottom: f64,
 }
 
+impl HeadBlock {
+    /// The titles `by` lower on their page, and where they end with them
+    /// (`top-markup-spacing`; score #1025).
+    pub(crate) fn lowered(mut self, by: f64) -> Self {
+        if !self.lines.is_empty() && by != 0.0 {
+            for line in &mut self.lines {
+                line.y += by;
+            }
+            self.bottom += by;
+        }
+        self
+    }
+}
+
+/// A line of words' ink over its baseline and under it, in ems: what the
+/// titles are stacked by, and the words after the music.
+pub(crate) const ASCENT: f64 = 0.72;
+/// Under it.
+pub(crate) const DESCENT: f64 = 0.25;
+
 /// Room above the titles and below them, in staff spaces: the title is not
 /// set flush against the top margin, nor the first system against it.
 pub const TITLE_PAD: f64 = 2.0;
@@ -145,7 +165,7 @@ pub fn header_lines(header: &HashMap<String, String>, width: f64) -> HeadBlock {
             if tallest == 0.0 {
                 continue;
             }
-            let ascent = 0.72 * tallest;
+            let ascent = ASCENT * tallest;
             y = if out.is_empty() { TITLE_PAD + ascent } else { (y + 3.5_f64).max(y + prev_descent + ascent + 0.3) };
             let mut cells = Vec::new();
             for (ci, cell) in line.into_iter().enumerate() {
@@ -161,7 +181,7 @@ pub fn header_lines(header: &HashMap<String, String>, width: f64) -> HeadBlock {
                 cells.push(Cell { text: cell.0, weight: cell.1, em: cell.2, x });
             }
             out.push(HeadLine { y, cells });
-            prev_descent = 0.25 * tallest;
+            prev_descent = DESCENT * tallest;
         }
     }
     let bottom = if out.is_empty() { 0.0 } else { y + prev_descent + TITLE_PAD };

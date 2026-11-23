@@ -24,6 +24,20 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- `\paper`'s `top-markup-spacing`, `score-markup-spacing` and
+  `markup-markup-spacing` are read and laid out (score #1025), each by its
+  `basic-distance`, `minimum-distance` and `padding`, as LilyPond measures
+  them — a system from its staff's middle line, a title or a block of words
+  from its top. The titles stand `top-markup-spacing` under the top of
+  their page (LilyPond's own: a space; a greater distance or padding puts
+  them, and the music under them, that much lower). The words written
+  after the music start `score-markup-spacing` under the last system —
+  twelve spaces from its staff's middle line where nothing is said, where
+  they stood two spaces and a line under its ink — nearer it, down to the
+  padding, on a page with no room for more; and each `\markup` after the
+  first follows the one before by `markup-markup-spacing`, half a space
+  under its last line, where an empty line parted them. The three were
+  passed over with a warning.
 - An instrument changed in the middle of a staff (score #1023): `\set
   Staff.instrumentName`, `shortInstrumentName` and `midiInstrument`, and
   `\transposition`, hold from where they are written. The systems after

@@ -274,30 +274,68 @@ pub(crate) fn after_em() -> f64 {
 const AFTER_STEP: f64 = 3.0;
 
 /// The words after the music (`Parsed::after_words`), set under the last
-/// system, a line every [`AFTER_STEP`]: on a screen the score is that much
-/// taller; on paper a line the page has no room for starts the next page.
-fn place_after(eng: &mut Engraved, parsed: &Parsed, layout: &Layout) {
+/// system, a block after the other, a block's lines every [`AFTER_STEP`].
+/// As LilyPond spaces them (score #1025): the first block's top
+/// `score-markup-spacing` under the middle line of the last system's
+/// staff — its basic distance, and its padding clear of the music's ink —
+/// and each block's top `markup-markup-spacing` under the top of the one
+/// before, its padding clear of that one's last line. On a screen the
+/// score is that much taller; on paper, words the page has no room for
+/// that far from the music come nearer it, down to the padding, and a
+/// line that still does not fit starts the next page —
+/// `top-markup-spacing` under its top.
+fn place_after(eng: &mut Engraved, parsed: &Parsed, layout: &Layout, opts: &Opts) {
+    use crate::breaking::rest_length;
+    use crate::text::{ASCENT, DESCENT};
     if parsed.after_words.is_empty() {
         return;
     }
+    let (ascent, descent) = (ASCENT * after_em(), DESCENT * after_em());
     let mut page = eng.pages.len().saturating_sub(1);
-    let bottom = eng.systems.iter().filter(|s| s.page == page).map(|s| s.bottom).fold(0.0, f64::max);
+    let last = eng.systems.iter().filter(|s| s.page == page).max_by(|a, b| a.bottom.total_cmp(&b.bottom));
+    let (bottom, middle) = last.map_or((0.0, 0.0), |s| (s.bottom, s.top + last_offset(s) + 2.0));
     let floor = layout.page_h.map(|h| h - layout.bottom.unwrap_or(0.0));
-    let head = layout.top.unwrap_or(0.0) + AFTER_STEP;
-    let mut y = bottom + 2.0 + AFTER_STEP;
-    for text in &parsed.after_words {
+    let head = layout.top.unwrap_or(0.0) + AFTER_STEP + opts.top_markup_drop();
+    // Each line's baseline from the first block's top.
+    let between = &opts.markup_markup;
+    let mut downs: Vec<f64> = Vec::with_capacity(parsed.after_words.len());
+    let (mut top, mut y) = (0.0, ascent);
+    for k in 0..parsed.after_words.len() {
+        if parsed.after_blocks.contains(&k) {
+            top = (top + rest_length(between)).max(y + descent + between.padding);
+            y = top + ascent;
+        } else if k > 0 {
+            y += AFTER_STEP;
+        }
+        downs.push(y);
+    }
+    let tall = y + descent;
+    // Where the first block's top is: as far under the music as the
+    // spacing says, nearer where the page ends sooner.
+    let clear = bottom + opts.score_markup.padding;
+    let far = (middle + rest_length(&opts.score_markup)).max(clear);
+    let near = (middle + opts.score_markup.min).max(clear);
+    let start = match floor {
+        Some(f) if far + tall > f && near + tall <= f => f - tall,
+        _ => far,
+    };
+    // A line past the page's foot starts the next page, the lines after it
+    // as far under it as they were.
+    let mut shift = start;
+    for (text, down) in parsed.after_words.iter().zip(&downs) {
+        let mut y = shift + down;
         if floor.is_some_and(|f| y > f && y > head) {
             page += 1;
             eng.pages.push(Page { index: page, systems: Vec::new() });
+            shift = head - down;
             y = head;
         }
         if !text.is_empty() {
             eng.after.push(AfterWords { text: text.clone(), x: eng.left, y, page });
         }
-        y += AFTER_STEP;
     }
     if layout.page_h.is_none() {
-        eng.height = eng.height.max(y - AFTER_STEP + 1.5);
+        eng.height = eng.height.max(shift + tall - descent + 1.5);
     }
 }
 
@@ -2417,7 +2455,7 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, width: f64, layout: &Layout) -> Re
         }
         engrave_one(parsed, width, layout, &opts)
     })?;
-    place_after(&mut eng, parsed, layout);
+    place_after(&mut eng, parsed, layout, &opts);
     Ok(eng)
 }
 
@@ -2466,7 +2504,7 @@ fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) ->
     }
     curves(&mut bars, &mut lines);
     marks::marks(&mut bars, &mut lines);
-    let head = header_lines(&parsed.header, width);
+    let head = header_lines(&parsed.header, width).lowered(opts.top_markup_drop());
     let mut systems: Vec<System> = lines.into_iter().map(|line| System { left: line.left, right: line.right, lines: vec![line], ..System::default() }).collect();
     let staves = vec![bars];
     let pages = stack(&mut systems, &staves, layout, &head, opts, &[]);
@@ -2779,7 +2817,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
         }
     }
     let inner: Vec<Vec<Spring>> = systems.iter_mut().map(|o| stack_staves(o, &all, &parsed.groups, staves_src)).collect();
-    let head = header_lines(&parsed.header, width);
+    let head = header_lines(&parsed.header, width).lowered(opts.top_markup_drop());
     let pages = stack(&mut systems, &all, layout, &head, opts, &inner);
     // The staves where the page put them: what joins them drawn there.
     for o in &mut systems {

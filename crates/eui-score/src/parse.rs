@@ -1710,9 +1710,12 @@ pub struct Parsed {
     /// What the music writes out: what layout has to draw (score #540).
     pub written: crate::written::Written,
     /// The words of the `\markup` blocks written after the music — a song's
-    /// verses under its tune (score #1031) — a line each, an empty one
-    /// between two blocks: set under the last system.
+    /// verses under its tune (score #1031) — a line each, one block after
+    /// the other: set under the last system.
     pub after_words: Vec<String>,
+    /// Where each block after the first starts in `after_words`: the room
+    /// between two blocks is `markup-markup-spacing`'s (score #1025).
+    pub after_blocks: Vec<usize>,
 }
 
 /// The page a source asks for: `\paper { #(set-paper-size "letter")
@@ -1776,6 +1779,15 @@ pub struct PaperSpec {
     pub top_spacing: Spacing,
     /// `last-bottom-spacing`: from a page's last system to its bottom margin.
     pub last_bottom_spacing: Spacing,
+    /// `top-markup-spacing`: from the top of a page to the titles, or the
+    /// words, it starts with (score #1025).
+    pub top_markup_spacing: Spacing,
+    /// `markup-markup-spacing`: from one block of words after the music to
+    /// the next.
+    pub markup_markup_spacing: Spacing,
+    /// `score-markup-spacing`: from a score's last system to the words
+    /// written after it.
+    pub score_markup_spacing: Spacing,
     /// `max-systems-per-page`: at most so many systems on a page.
     pub max_systems_per_page: Option<usize>,
     /// `page-count`: the music on so many pages.
@@ -2622,17 +2634,19 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     }
     // The words after the last score go under it; between two scores they are not set.
     let mut after_words: Vec<String> = Vec::new();
+    let mut after_blocks: Vec<usize> = Vec::new();
     for (notes, at, lines) in std::mem::take(&mut st.words) {
         if notes < st.notes || lines.is_empty() {
             warn("\\markup outside the music is not drawn", at);
             continue;
         }
         if !after_words.is_empty() {
-            after_words.push(String::new());
+            after_blocks.push(after_words.len());
         }
         after_words.extend(lines);
     }
-    let mut parsed = Parsed { header: st.header, paper: st.paper, staves, groups, warnings: Vec::new(), spacing: SpacingSpanner::default(), written: crate::written::Written::default(), after_words };
+    let mut parsed =
+        Parsed { header: st.header, paper: st.paper, staves, groups, warnings: Vec::new(), spacing: SpacingSpanner::default(), written: crate::written::Written::default(), after_words, after_blocks };
     crate::look::at_start(&mut parsed.staves);
     // What layout gets, counted whole: each staff as long as the longest.
     parsed.written = crate::written::finished(&parsed);
@@ -2877,6 +2891,9 @@ fn spacing_setting(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Option<usiz
         "markup-system-spacing" => &mut paper.markup_spacing,
         "top-system-spacing" => &mut paper.top_spacing,
         "last-bottom-spacing" => &mut paper.last_bottom_spacing,
+        "top-markup-spacing" => &mut paper.top_markup_spacing,
+        "markup-markup-spacing" => &mut paper.markup_markup_spacing,
+        "score-markup-spacing" => &mut paper.score_markup_spacing,
         _ => return None,
     };
     let put = |slot: &mut Spacing, key: &str, v: f64| match key {
