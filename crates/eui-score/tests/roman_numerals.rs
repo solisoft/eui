@@ -139,3 +139,66 @@ fn the_analysis_is_drawn_under_its_notes() {
     engrave_paper(SNIPPET).unwrap();
     assert!(pdf(SNIPPET, "rn").unwrap().starts_with("%PDF"));
 }
+
+/// Each sung note's head and its syllable, in staff spaces across the page:
+/// (head's middle, syllable's middle), the syllables in the order drawn.
+fn centred(src: &str, paper: bool) -> Vec<(f64, f64)> {
+    use eui_score::{paths_words, Path};
+    let sp = 8.0;
+    let eng = if paper { engrave_paper(src).unwrap().0 } else { engrave(src, 900.0 / 8.0, &Layout::default()).unwrap() };
+    let (drawn, _, heads, words, _) = paths_words(&eng, sp, 0).unwrap();
+    let span = |r: &std::ops::Range<usize>| {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for p in &drawn[r.clone()] {
+            match p {
+                Path::Rect([x, _, w, _]) => {
+                    lo = lo.min(*x);
+                    hi = hi.max(x + w);
+                }
+                Path::Fill(cmds) => {
+                    let mut k = 0;
+                    while k < cmds.len() {
+                        let n = match cmds[k] as i64 {
+                            0 | 1 => 2,
+                            2 => 4,
+                            3 => 6,
+                            _ => 0,
+                        };
+                        for c in (0..n).step_by(2) {
+                            lo = lo.min(cmds[k + 1 + c]);
+                            hi = hi.max(cmds[k + 1 + c]);
+                        }
+                        k += 1 + n;
+                    }
+                }
+            }
+        }
+        (lo + hi) / 2.0 / sp
+    };
+    words
+        .iter()
+        .filter(|w| w.1 == "lyric")
+        .map(|(item, _, _, r)| {
+            let head = heads.iter().find(|h| h.0 == *item).expect("its note's head");
+            (span(&head.2), span(r))
+        })
+        .collect()
+}
+
+#[test]
+fn each_numeral_is_centred_on_the_note_it_is_sung_to() {
+    // On a screen and on paper.
+    for paper in [false, true] {
+        let got = centred(SNIPPET, paper);
+        assert_eq!(got.len(), 10);
+        for (k, (head, word)) in got.iter().enumerate() {
+            assert!((head - word).abs() < 0.5, "paper {paper}, numeral {k}: head at {head:.2}, numeral at {word:.2}");
+        }
+    }
+    // Markup in plain lyrics, and words beside it, likewise.
+    let plain = centred("{ c'4 d' e' f' } \\addlyrics { \\markup { \"V\" \\super \"7\" } la \\markup \\rN { V 6 5 } \\markup \\bold { lo } }", false);
+    assert_eq!(plain.len(), 4);
+    for (k, (head, word)) in plain.iter().enumerate() {
+        assert!((head - word).abs() < 0.5, "syllable {k}: head at {head:.2}, syllable at {word:.2}");
+    }
+}

@@ -1237,7 +1237,10 @@ version 7) and a margin.
   `\sub` and `\concat`
   (`plain_markup_under_the_notes_raises_with_super_and_lowers_with_sub`);
   each drawn, character by character, under its note, a stacked pair as
-  wide as its wider figure (`the_analysis_is_drawn_under_its_notes`).
+  wide as its wider figure (`the_analysis_is_drawn_under_its_notes`);
+  each numeral, and markup or words in plain lyrics, centred on the head
+  of the note it is sung to, within half a space, on a screen and on
+  paper (`each_numeral_is_centred_on_the_note_it_is_sung_to`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11
