@@ -327,7 +327,7 @@ fn play(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, sounding: &mut Vec<(i64, Sounding
 }
 
 /// The ornaments played (score #978), as LilyPond's articulate.ly plays them.
-const ORNAMENTS: [&str; 4] = ["trill", "prall", "mordent", "turn"];
+const ORNAMENTS: [&str; 6] = ["trill", "prall", "mordent", "turn", "reverseturn", "prallprall"];
 
 /// A note's ornament, `ornament`, and its chord rolled when `rolled`, from
 /// `t0` for `length` (score #978). A rolled chord's notes come in from the
@@ -336,7 +336,9 @@ const ORNAMENTS: [&str; 4] = ["trill", "prall", "mordent", "turn"];
 /// 32nds (a quarter of the note at most each), its neighbours the key's:
 /// a trill goes between the note and the one above to the note's end; a
 /// prall is the note, the one above, the note; a mordent the note, the one
-/// below, the note; a turn the one above, the note, the one below, the note.
+/// below, the note; a turn the one above, the note, the one below, the note;
+/// a reverse turn the one below, the note, the one above, the note; a double
+/// prall the note and the one above twice, then the note.
 #[allow(clippy::too_many_arguments)]
 fn ornamented(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, heads: &[(i64, i64)], ornament: Option<&str>, rolled: bool, t0: i64, length: i64, vel: u8, channel: i64, fifths: i64) {
     let mut keys: Vec<(i64, i64, i64)> = heads.iter().map(|&(d, alter)| (key_of(d, alter), d, alter)).collect();
@@ -364,6 +366,9 @@ fn ornamented(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, heads: &[(i64, i64)], ornam
         Some("prall") => &[top, above],
         Some("mordent") => &[top, below],
         Some("turn") => &[above, top, below],
+        // Score #1026: the turn the other way round, and the prall twice.
+        Some("reverseturn") => &[below, top, above],
+        Some("prallprall") => &[top, above, top, above],
         _ => &[],
     };
     let mut t = start;
@@ -418,7 +423,7 @@ pub(crate) struct Hold {
 /// Where the fermatas hold, over every staff, in time order: of several
 /// notes under a fermata that end together, the longest is the one held.
 pub(crate) fn holds(measured: &[Vec<Bar>], opts: &MidiOptions) -> Vec<Hold> {
-    let mut by_end: Vec<(i64, i64)> = Vec::new();
+    let mut by_end: Vec<(i64, i64, f64)> = Vec::new();
     let mut tempi: Vec<(i64, f64)> = Vec::new();
     for bars in measured {
         let mut at = 0;
@@ -429,12 +434,16 @@ pub(crate) fn holds(measured: &[Vec<Bar>], opts: &MidiOptions) -> Vec<Hold> {
                         tempi.push((at + ev.start, quarter_seconds(mark.bpm as f64, mark.base)));
                     }
                 }
-                if ev.k == Kind::Note && ev.scripts.iter().any(|sc| sc.name == "fermata") {
+                let factor = ev.scripts.iter().filter_map(|sc| fermata_factor(&sc.name)).fold(0.0, f64::max);
+                if ev.k == Kind::Note && factor > 0.0 {
                     let span = ev.ticks * ev.mm.unwrap_or(1);
                     let ends = at + ev.start + span;
                     match by_end.iter_mut().find(|h| h.0 == ends) {
-                        Some(h) => h.1 = h.1.max(span),
-                        None => by_end.push((ends, span)),
+                        Some(h) => {
+                            h.1 = h.1.max(span);
+                            h.2 = h.2.max(factor);
+                        }
+                        None => by_end.push((ends, span, factor)),
                     }
                 }
             }
@@ -448,11 +457,27 @@ pub(crate) fn holds(measured: &[Vec<Bar>], opts: &MidiOptions) -> Vec<Hold> {
     let start = if opts.bpm > 0.0 { quarter_seconds(opts.bpm, opts.beat) } else { 0.5 };
     by_end
         .into_iter()
-        .map(|(ends, span)| {
+        .map(|(ends, span, factor)| {
             let quarter = tempi.iter().take_while(|t| t.0 < ends).last().map_or(start, |t| t.1);
-            Hold { ends, sustain: span / 2, breath: breath_ticks(quarter) }
+            let scaled = |t: i64| (t as f64 * factor).round() as i64;
+            Hold { ends, sustain: scaled(span / 2), breath: scaled(breath_ticks(quarter)) }
         })
         .collect()
+}
+
+/// How long a fermata holds against `\fermata`'s hold (score #1026): the
+/// very short one a quarter of it, the short ones half, the long ones half
+/// as long again, the very long one twice — the note's extra length and
+/// the breath after it alike. None for a script that is no fermata.
+fn fermata_factor(name: &str) -> Option<f64> {
+    Some(match name {
+        "fermata" => 1.0,
+        "veryshortfermata" => 0.25,
+        "shortfermata" | "henzeshortfermata" => 0.5,
+        "longfermata" | "henzelongfermata" => 1.5,
+        "verylongfermata" => 2.0,
+        _ => return None,
+    })
 }
 
 /// A quarter's length in seconds at `bpm` beats of `beat` (4 a quarter) a minute.

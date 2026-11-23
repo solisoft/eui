@@ -20,8 +20,9 @@ pub const DYNAMICS: [&str; 21] = ["pppp", "ppp", "pp", "p", "mp", "mf", "f", "ff
 /// The articulations a score prints, by their LilyPond names: the Soli
 /// engraver's seven, and the ornaments, the hi-hat's signs, the bowings,
 /// the harmonic's circle and the espressivo protocol 11 adds, and the segno
-/// and coda written over a note (`c4\segno`, `\coda`, `\varcoda`).
-pub const SCRIPTS: [&str; 20] = [
+/// and coda written over a note (`c4\segno`, `\coda`, `\varcoda`); then
+/// the other ornaments, fermatas and the snap pizzicato (score #1026).
+pub const SCRIPTS: [&str; 32] = [
     "staccato",
     "tenuto",
     "accent",
@@ -42,6 +43,18 @@ pub const SCRIPTS: [&str; 20] = [
     "segno",
     "coda",
     "varcoda",
+    "reverseturn",
+    "prallprall",
+    "prallmordent",
+    "upprall",
+    "lineprall",
+    "veryshortfermata",
+    "shortfermata",
+    "longfermata",
+    "verylongfermata",
+    "henzeshortfermata",
+    "henzelongfermata",
+    "snappizzicato",
 ];
 
 /// The most tokens a source may come to once its variables are written out:
@@ -6038,6 +6051,24 @@ fn music_glyph(name: &str) -> Option<&'static str> {
         "scripts.prall" => "ornamentShortTrill",
         "scripts.mordent" => "ornamentMordent",
         "scripts.turn" => "ornamentTurn",
+        "scripts.reverseturn" => "ornamentTurnInverted",
+        "scripts.prallprall" => "ornamentTremblement",
+        "scripts.prallmordent" => "ornamentPrecompTrillWithMordent",
+        "scripts.upprall" => "ornamentPrecompSlideTrillDAnglebert",
+        "scripts.lineprall" => "ornamentPrecompAppoggTrill",
+        "scripts.uveryshortfermata" => "fermataVeryShortAbove",
+        "scripts.dveryshortfermata" => "fermataVeryShortBelow",
+        "scripts.ushortfermata" => "fermataShortAbove",
+        "scripts.dshortfermata" => "fermataShortBelow",
+        "scripts.ulongfermata" => "fermataLongAbove",
+        "scripts.dlongfermata" => "fermataLongBelow",
+        "scripts.uverylongfermata" => "fermataVeryLongAbove",
+        "scripts.dverylongfermata" => "fermataVeryLongBelow",
+        "scripts.uhenzeshortfermata" => "fermataShortHenzeAbove",
+        "scripts.dhenzeshortfermata" => "fermataShortHenzeBelow",
+        "scripts.uhenzelongfermata" => "fermataLongHenzeAbove",
+        "scripts.dhenzelongfermata" => "fermataLongHenzeBelow",
+        "scripts.snappizzicato" => "pluckedSnapPizzicatoAbove",
         "scripts.staccato" => "articStaccatoAbove",
         "scripts.sforzato" => "articAccentAbove",
         _ => return None,

@@ -241,6 +241,21 @@ fn script_rule(name: &str) -> ScriptRule {
         // `\segno`, `\coda`, `\varcoda` over a note, as LilyPond sets them.
         "segno" => r("segno", "segno", 0.4, 0, -1, false),
         "coda" | "varcoda" => r("coda", "coda", 0.4, 0, -1, false),
+        // Score #1026: the other ornaments over the note, as the turn;
+        // the snap pizzicato over it (LilyPond's `snappizzicato`, padding 0.2).
+        "reverseturn" => r("ornamentTurnInverted", "ornamentTurnInverted", 0.2, 0, -1, false),
+        "prallprall" => r("ornamentTremblement", "ornamentTremblement", 0.2, 0, -1, false),
+        "prallmordent" => r("ornamentPrecompTrillWithMordent", "ornamentPrecompTrillWithMordent", 0.2, 0, -1, false),
+        "upprall" => r("ornamentPrecompSlideTrillDAnglebert", "ornamentPrecompSlideTrillDAnglebert", 0.2, 0, -1, false),
+        "lineprall" => r("ornamentPrecompAppoggTrill", "ornamentPrecompAppoggTrill", 0.2, 0, -1, false),
+        "snappizzicato" => r("pluckedSnapPizzicatoAbove", "pluckedSnapPizzicatoAbove", 0.2, 0, -1, false),
+        // The fermatas, each its own sign, set as `\fermata` is.
+        "veryshortfermata" => r("fermataVeryShortAbove", "fermataVeryShortBelow", 0.4, 4000, -1, false),
+        "shortfermata" => r("fermataShortAbove", "fermataShortBelow", 0.4, 4000, -1, false),
+        "longfermata" => r("fermataLongAbove", "fermataLongBelow", 0.4, 4000, -1, false),
+        "verylongfermata" => r("fermataVeryLongAbove", "fermataVeryLongBelow", 0.4, 4000, -1, false),
+        "henzeshortfermata" => r("fermataShortHenzeAbove", "fermataShortHenzeBelow", 0.4, 4000, -1, false),
+        "henzelongfermata" => r("fermataLongHenzeAbove", "fermataLongHenzeBelow", 0.4, 4000, -1, false),
         _ => r("fermataAbove", "fermataBelow", 0.4, 4000, -1, false),
     }
 }

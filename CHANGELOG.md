@@ -185,10 +185,35 @@ release. A wire change lands here first, is released, and then the pin moves.
   sung on one note, joined by a small tie under them with half a word
   space either side, as LilyPond's `tied-lyric` sets them. The tilde was
   printed as it is written.
+- A score reads the other ornaments and fermatas, which were refused
+  (score #1026): `\reverseturn`, `\prallprall`, `\prallmordent`,
+  `\upprall`, `\lineprall`, `\veryshortfermata`, `\shortfermata`,
+  `\longfermata`, `\verylongfermata`, `\henzeshortfermata`,
+  `\henzelongfermata`, and `\snappizzicato` — Emmentaler's own signs,
+  appended to the glyph table through `xtask smufl`. A reverse turn and a
+  double prall are played as the turn and the prall are; each fermata holds
+  for its length, from a quarter of `\fermata`'s hold to twice it.
 - A score reads `\new RhythmicStaff`, which was refused (score #1026):
   one line, every note on it — its rhythm drawn, its pitch not — stems
   and beams up, no clef, key or accidental; alone or beside other staves.
   The notes are played as written.
+
+### Changed
+
+- A chord's accidentals stand as LilyPond places them (score #1019): the
+  top one nearest the heads, then the bottom one, then the second from the
+  top — the engraving books' zig-zag; notes an octave apart share a column,
+  unless that leaves one of them away from its head;
+  and each sign goes as near as the ink already there lets it, 0.2 space
+  clear of it, so a flat or a natural goes under the sharp over it. They
+  stood in columns of whole boxes filled from the top, where two flats a
+  sixth apart touched.
+- A beam keeps from what stands between its ends (score #1019, LilyPond's
+  beam collisions): another voice's heads, accidentals, stems and flags, a
+  clef, a key or a metre changed in the middle of the bar, another voice's
+  beam. It goes past them, away from its own heads — its stems that much
+  longer — half a space clear where it can; `\override Beam.positions`
+  still says where it is. A beam with nothing under it is where it was.
 
 ### Fixed
 
@@ -272,20 +297,6 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Changed
 
-- A chord's accidentals stand as LilyPond places them (score #1019): the
-  top one nearest the heads, then the bottom one, then the second from the
-  top — the engraving books' zig-zag; notes an octave apart share a column,
-  unless that leaves one of them away from its head;
-  and each sign goes as near as the ink already there lets it, 0.2 space
-  clear of it, so a flat or a natural goes under the sharp over it. They
-  stood in columns of whole boxes filled from the top, where two flats a
-  sixth apart touched.
-- A beam keeps from what stands between its ends (score #1019, LilyPond's
-  beam collisions): another voice's heads, accidentals, stems and flags, a
-  clef, a key or a metre changed in the middle of the bar, another voice's
-  beam. It goes past them, away from its own heads — its stems that much
-  longer — half a space clear where it can; `\override Beam.positions`
-  still says where it is. A beam with nothing under it is where it was.
 - The demo at eui-data.solisoft.net runs on the server's own `soli`
   (`soli serve` in its `app.infos`), as the other sites do, instead of a
   version pinned in its workflow and installed beside it: it sat on 2.27.2

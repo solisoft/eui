@@ -94,6 +94,70 @@ fn quarter(src: &str) -> u32 {
     u32::from(u16::from_be_bytes([bytes[12], bytes[13]]))
 }
 
+// ---- Ornaments and fermatas ----------------------------------------------------
+
+#[test]
+fn the_other_ornaments_and_fermatas_are_drawn_in_their_own_signs() {
+    for (cmd, above, below) in [
+        ("reverseturn", "ornamentTurnInverted", "ornamentTurnInverted"),
+        ("prallprall", "ornamentTremblement", "ornamentTremblement"),
+        ("prallmordent", "ornamentPrecompTrillWithMordent", "ornamentPrecompTrillWithMordent"),
+        ("upprall", "ornamentPrecompSlideTrillDAnglebert", "ornamentPrecompSlideTrillDAnglebert"),
+        ("lineprall", "ornamentPrecompAppoggTrill", "ornamentPrecompAppoggTrill"),
+        ("snappizzicato", "pluckedSnapPizzicatoAbove", "pluckedSnapPizzicatoAbove"),
+        ("veryshortfermata", "fermataVeryShortAbove", "fermataVeryShortBelow"),
+        ("shortfermata", "fermataShortAbove", "fermataShortBelow"),
+        ("longfermata", "fermataLongAbove", "fermataLongBelow"),
+        ("verylongfermata", "fermataVeryLongAbove", "fermataVeryLongBelow"),
+        ("henzeshortfermata", "fermataShortHenzeAbove", "fermataShortHenzeBelow"),
+        ("henzelongfermata", "fermataLongHenzeAbove", "fermataLongHenzeBelow"),
+    ] {
+        let src = format!(r"{{ c''4\{cmd} c''4_\{cmd} }}");
+        let e = eng(&src);
+        let line = &e.systems[0].lines[0];
+        let glyphs: Vec<(&str, f64)> = line.scripts.iter().map(|sc| (sc.glyph, sc.y)).collect();
+        assert_eq!(glyphs.len(), 2, "{src}: {glyphs:?}");
+        assert_eq!(glyphs[0].0, above, "{src}");
+        assert!(glyphs[0].1 < 0.0, "{src}: over the staff");
+        if above != below {
+            assert_eq!(glyphs[1].0, below, "{src}: its own sign under the note");
+            assert!(glyphs[1].1 > 4.0, "{src}: under the staff");
+        }
+        // The glyph is Emmentaler's, in the table.
+        assert!(eui_score::glyphs::glyph(above).advance > 0.0, "{above}");
+        paths(&e, 8.0, 0).unwrap();
+    }
+}
+
+#[test]
+fn a_reverse_turn_and_a_double_prall_are_played() {
+    let q = quarter(r"{ c'4 }");
+    let turn: Vec<u8> = played(r"{ c''4\reverseturn }").iter().map(|n| n.0).collect();
+    assert_eq!(turn, vec![71, 72, 74, 72], "below, the note, above, the note");
+    let prall = played(r"{ c''4\prallprall }");
+    assert_eq!(prall.iter().map(|n| n.0).collect::<Vec<_>>(), vec![72, 74, 72, 74, 72]);
+    assert_eq!((prall[4].1, prall[4].2), (q / 2, q), "in 32nds, the note held to its end");
+}
+
+#[test]
+fn each_fermata_holds_as_long_as_it_says() {
+    let q = quarter(r"{ c'4 }");
+    // \fermata: half the note again, then two seconds (four quarters at 120).
+    for (cmd, held, breath) in [
+        ("fermata", q / 2, 4 * q),
+        ("veryshortfermata", q / 8, q),
+        ("shortfermata", q / 4, 2 * q),
+        ("henzeshortfermata", q / 4, 2 * q),
+        ("longfermata", 3 * q / 4, 6 * q),
+        ("henzelongfermata", 3 * q / 4, 6 * q),
+        ("verylongfermata", q, 8 * q),
+    ] {
+        let all = played(&format!(r"{{ c''4\{cmd} d''4 }}"));
+        assert_eq!(all[0].2, q + held, "{cmd}: held");
+        assert_eq!(all[1].1, q + held + breath, "{cmd}: then the breath");
+    }
+}
+
 // ---- Arpeggio styles ---------------------------------------------------------
 
 #[test]
