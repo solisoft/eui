@@ -424,12 +424,12 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
             let from = Source { kind: CurveKind::Tie, item: ev.i, at: ev.at, head: Some(hd.d), piece: 0 };
             if ev.lv {
                 let xa = ev.x + ev.head_w.unwrap_or(0.0) + 0.15;
-                arc(line, from, xa, y, xa + SHORT_TIE, y, dir);
+                arc(line, &ev.look, from, xa, y, xa + SHORT_TIE, y, dir);
             }
             if ev.repeat_tie {
                 let acc = ev.heads.iter().filter_map(|h| h.acc_x).fold(0.0, f64::min);
                 let xb = ev.x + acc - 0.15;
-                arc(line, from, xb - SHORT_TIE, y, xb, y, dir);
+                arc(line, &ev.look, from, xb - SHORT_TIE, y, xb, y, dir);
             }
         }
     }
@@ -520,13 +520,13 @@ fn tie(lines: &mut [Line], ev: &Ev, hd: &crate::parse::Head, nxt: &Ev, other: i6
     }
     let xb = nxt.x - 0.15;
     if ev.sys == nxt.sys {
-        arc(&mut lines[ev.sys], from, xa, y, xb, y2, dir);
+        arc(&mut lines[ev.sys], &ev.look, from, xa, y, xb, y2, dir);
     } else {
         let end = lines[ev.sys].bar_end - 0.5;
-        arc(&mut lines[ev.sys], from, xa, y, end, y, dir);
+        arc(&mut lines[ev.sys], &ev.look, from, xa, y, end, y, dir);
         let later = &mut lines[nxt.sys];
         let start = later.prefix - 0.6;
-        arc(later, Source { piece: 1, ..from }, start, y2, xb, y2, dir);
+        arc(later, &ev.look, Source { piece: 1, ..from }, start, y2, xb, y2, dir);
     }
 }
 
@@ -841,8 +841,9 @@ fn slur(lines: &mut [Line], bars: &[Bar], notes: &[At], ends: (At, At), kind: Cu
         }
         avoid
     };
+    let grob = if kind == CurveKind::Phrase { "PhrasingSlur" } else { "Slur" };
     let keep = |line: &mut Line, drawn: &mut Vec<Drawn>, sys: usize, bow: Bow, from: Source| {
-        let points = bow.points(s);
+        let points = shaped(bow.points(s), &f.look, grob, from.piece);
         drawn.push(Drawn { sys, voice: voice_of(f), first: fnum, last: lnum, points });
         line.curves.push(curve_outline(&points, s));
         line.curve_places.push(CurvePlace { kind: from.kind, item: from.item, at: from.at, head: None, points, up: over, piece: from.piece });
@@ -921,13 +922,25 @@ pub(crate) fn bezier(p: &[(f64, f64); 4], t: f64) -> (f64, f64) {
     (a * p[0].0 + b * p[1].0 + c * p[2].0 + d * p[3].0, a * p[0].1 + b * p[1].1 + c * p[2].1 + d * p[3].1)
 }
 
-/// A tie: LilyPond's height for its width.
-fn arc(line: &mut Line, from: Source, xa: f64, ya: f64, xb: f64, yb: f64, dir: f64) {
+/// A curve's control points moved as `\shape` says for this piece of it:
+/// each by its offset, up for a positive `dy`.
+fn shaped(points: [(f64, f64); 4], look: &crate::look::Look, grob: &str, piece: usize) -> [(f64, f64); 4] {
+    let Some(by) = look.shape(grob, piece) else { return points };
+    [0, 1, 2, 3].map(|k| (points[k].0 + by[k].0, points[k].1 - by[k].1))
+}
+
+/// A tie: LilyPond's height for its width; `look` its note's settings.
+#[allow(clippy::too_many_arguments)]
+fn arc(line: &mut Line, look: &crate::look::Look, from: Source, xa: f64, ya: f64, xb: f64, yb: f64, dir: f64) {
     let hgt = curve_height((xb - xa).max(0.1), 1.0, 0.333);
-    if let Some(cmds) = arc_cmds(xa, ya, xb, yb, dir, hgt) {
+    if let Some(mut cmds) = arc_cmds(xa, ya, xb, yb, dir, hgt) {
         let inset = (xb - xa) * 0.25;
         let c = hgt * 4.0 / 3.0;
-        let points = [(xa, ya), (xa + inset, ya + dir * c), (xb - inset, yb + dir * c), (xb, yb)];
+        let plain = [(xa, ya), (xa + inset, ya + dir * c), (xb - inset, yb + dir * c), (xb, yb)];
+        let points = shaped(plain, look, "Tie", from.piece);
+        if points != plain {
+            cmds = curve_outline(&points, dir);
+        }
         line.curves.push(cmds);
         line.curve_places.push(CurvePlace { kind: from.kind, item: from.item, at: from.at, head: from.head, points, up: dir < 0.0, piece: from.piece });
     }

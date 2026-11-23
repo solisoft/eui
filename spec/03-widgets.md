@@ -738,7 +738,13 @@ construct as LilyPond 2.25 draws it:
   outside a slur that passes where they would be. A phrasing slur goes
   round the slurs under it. Rests, grace notes and other voices under a
   slur are not gone round, and a slur between two staves is drawn as
-  before.
+  before. `\shape #'((dx . dy) …) Slur` before the note a curve starts
+  on, or `-\shape #'(…) (` before the curve, moves the four control
+  points of a slur, a phrasing slur or a tie by its offsets, in staff
+  spaces, a positive dy up, from where they were put; a list of such
+  lists moves each piece of a curve a line break parts, a single list its
+  first piece. A `\shape` of another curve, or one that is not four
+  offsets, is passed over with a warning.
 - *Signs an engraver is expected to know* (score #1026):
   the ornaments `\reverseturn`, `\prallprall`, `\prallmordent`,
   `\upprall`, `\lineprall`, the fermatas `\veryshortfermata`,

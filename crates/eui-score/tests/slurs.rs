@@ -227,3 +227,69 @@ fn a_curve_says_the_note_it_starts_on() {
     assert_eq!(pieces.iter().map(|p| p.piece).collect::<Vec<_>>(), [0, 1]);
     assert!(pieces.iter().all(|p| p.item == pieces[0].item));
 }
+
+/// `\shape` moves a curve's four control points, each by its offset, up
+/// for a positive dy: before the note, or after it before the curve.
+#[test]
+fn shape_moves_the_four_control_points() {
+    let plain = set(r"{ c''4( d'' e'' f'') }");
+    let base = curves(&plain, CurveKind::Slur)[0].points;
+    let by = [(0.0, -0.5), (1.0, 2.0), (-1.0, 2.0), (0.25, 0.5)];
+    for src in [r"{ \shape #'((0 . -0.5) (1 . 2) (-1 . 2) (0.25 . 0.5)) Slur c''4( d'' e'' f'') }", r"{ c''4-\shape #'((0 . -0.5) (1 . 2) (-1 . 2) (0.25 . 0.5)) ( d'' e'' f'') }"] {
+        assert!(eui_score::warnings(src).unwrap().is_empty(), "{src}: {:?}", eui_score::warnings(src));
+        let eng = set(src);
+        let got = curves(&eng, CurveKind::Slur)[0].points;
+        for k in 0..4 {
+            assert!((got[k].0 - (base[k].0 + by[k].0)).abs() < 1e-9 && (got[k].1 - (base[k].1 - by[k].1)).abs() < 1e-9, "{src}: point {k} is {:?}, from {:?}", got[k], base[k]);
+        }
+        // The outline drawn is the moved curve's: it starts at its first point.
+        let line = &eng.systems[0].lines[0];
+        assert!((line.curves[0][1] - got[0].0).abs() < 1e-9);
+    }
+    // It is the next note's alone.
+    let once = set(r"{ \shape #'((0 . 0) (0 . 1) (0 . 1) (0 . 0)) Slur c''4( d'') c''( d'') }");
+    let two = curves(&once, CurveKind::Slur);
+    assert!(two[0].points[1].1 < two[1].points[1].1 - 0.9, "the first slur alone is raised");
+    assert_eq!(two[0].points[0].1, two[1].points[0].1);
+}
+
+/// A phrasing slur and a tie are shaped as a slur is; a curve a line break
+/// parts takes a list for each piece, and a single list is its first's.
+#[test]
+fn shape_reaches_phrasing_slurs_ties_and_each_piece_of_a_broken_curve() {
+    let up = "#'((0 . 1) (0 . 1) (0 . 1) (0 . 1))";
+    for (kind, plain, shaped) in [
+        (CurveKind::Phrase, r"{ c''4\( d''\) }".to_owned(), format!(r"{{ \shape {up} PhrasingSlur c''4\( d''\) }}")),
+        (CurveKind::Phrase, r"{ c''4\( d''\) }".to_owned(), format!(r"{{ c''4-\shape {up} \( d''\) }}")),
+        (CurveKind::Tie, r"{ c''2~ c'' }".to_owned(), format!(r"{{ \shape {up} Tie c''2~ c'' }}")),
+        (CurveKind::Tie, r"{ c''2~ c'' }".to_owned(), format!(r"{{ c''2-\shape {up} ~ c'' }}")),
+    ] {
+        assert!(eui_score::warnings(&shaped).unwrap().is_empty(), "{shaped}");
+        let (a, b) = (set(&plain), set(&shaped));
+        let (a, b) = (curves(&a, kind)[0].points, curves(&b, kind)[0].points);
+        for k in 0..4 {
+            assert!((b[k].1 - (a[k].1 - 1.0)).abs() < 1e-9 && b[k].0 == a[k].0, "{shaped}: point {k}");
+        }
+    }
+    let plain = set(r"{ c''1( \break d'') }");
+    let both = set(r"{ \shape #'(((0 . 0) (0 . 1) (0 . 1) (0 . 1)) ((0 . 2) (0 . 2) (0 . 2) (0 . 0))) Slur c''1( \break d'') }");
+    let first = set(r"{ \shape #'((0 . 0) (0 . 1) (0 . 1) (0 . 1)) Slur c''1( \break d'') }");
+    let (p, b, f) = (curves(&plain, CurveKind::Slur), curves(&both, CurveKind::Slur), curves(&first, CurveKind::Slur));
+    assert!((b[0].points[3].1 - (p[0].points[3].1 - 1.0)).abs() < 1e-9);
+    assert!((b[1].points[0].1 - (p[1].points[0].1 - 2.0)).abs() < 1e-9);
+    assert_eq!(b[1].points[3], p[1].points[3]);
+    assert!((f[0].points[3].1 - (p[0].points[3].1 - 1.0)).abs() < 1e-9);
+    assert_eq!(f[1].points, p[1].points, "a single list is the first piece's");
+}
+
+/// A `\shape` this cannot draw is passed over with its warning, and the
+/// music is set without it.
+#[test]
+fn a_shape_of_another_curve_is_passed_over_with_a_warning() {
+    for src in [r"{ \shape #'((0 . 0) (0 . 1) (0 . 1) (0 . 0)) LaissezVibrerTie c''4( d'') }", r"{ \shape #'((0 . 0) (0 . 1)) Slur c''4( d'') }"] {
+        let warnings = eui_score::warnings(src).unwrap();
+        assert_eq!(warnings.len(), 1, "{src}");
+        assert!(warnings[0].message.starts_with("\\shape is not drawn"), "{}", warnings[0].message);
+        assert_eq!(curves(&set(src), CurveKind::Slur)[0].points, curves(&set(r"{ c''4( d'') }"), CurveKind::Slur)[0].points);
+    }
+}

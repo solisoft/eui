@@ -111,6 +111,15 @@ impl Look {
         self.pair(&format!("{grob}.extra-offset")).map_or((0.0, 0.0), |(x, y)| (x, -y))
     }
 
+    /// `\shape`'s offsets for the piece `piece` of a curve (`Slur`,
+    /// `PhrasingSlur`, `Tie`): `(dx, dy)` for each of its four control
+    /// points, in staff spaces, y up as LilyPond counts it.
+    pub fn shape(&self, grob: &str, piece: usize) -> Option<[(f64, f64); 4]> {
+        let Some(Val::List(l)) = self.get(&format!("{grob}.shape")) else { return None };
+        let o = l.get(piece * 8..piece * 8 + 8)?;
+        Some([(o[0], o[1]), (o[2], o[3]), (o[4], o[5]), (o[6], o[7])])
+    }
+
     /// The settings themselves.
     pub fn map(&self) -> Option<&Map> {
         self.0.as_deref()
@@ -997,6 +1006,44 @@ pub(crate) fn tweak(toks: &[Tok], i: usize) -> Result<Option<(String, Val, usize
         return Ok(None);
     }
     Ok(Some((key, v, end)))
+}
+
+/// The curves `\shape` moves the control points of.
+const SHAPED: [&str; 3] = ["Slur", "PhrasingSlur", "Tie"];
+
+/// A `\shape` at `i`: `\shape #'((dx . dy) …) Slur` before the note its
+/// curve starts on, or `-\shape #'(…) (` before the curve itself — four
+/// offsets, one for each control point, or a list of such lists, one for
+/// each piece of a curve a line break parts. Answers the setting,
+/// `Grob.shape` with the offsets eight numbers a piece, and the token after
+/// it; no setting for a curve this does not draw or offsets it cannot read.
+pub(crate) fn shape(toks: &[Tok], i: usize) -> Result<(Option<(String, Val)>, usize), ScoreError> {
+    let j = crate::parse::value_end(toks, i + 1)?;
+    // The grob named after the offsets, or the curve that follows them.
+    let (grob, end) = if is(toks, j, T::Word) {
+        let end = crate::parse::path_end(toks, j);
+        (words(toks, j, end).last().cloned(), end)
+    } else {
+        (tweaked(toks, j).map(str::to_owned), j)
+    };
+    let Some(grob) = grob.filter(|g| SHAPED.contains(&g.as_str())) else { return Ok((None, end)) };
+    let piece = |d: &Sx| -> Option<Vec<f64>> {
+        let Sx::List(items) = d else { return None };
+        let mut out = Vec::new();
+        for it in items {
+            let Sx::Pair(x, y) = it else { return None };
+            out.extend([as_num(x)?, as_num(y)?]);
+        }
+        (out.len() == 8).then_some(out)
+    };
+    let offsets = read(toks, i + 1, j).and_then(|d| match piece(&d) {
+        Some(one) => Some(one),
+        None => match &d {
+            Sx::List(pieces) if !pieces.is_empty() && pieces.len() <= 8 => pieces.iter().map(piece).collect::<Option<Vec<_>>>().map(|v| v.concat()),
+            _ => None,
+        },
+    });
+    Ok((offsets.map(|o| (format!("{grob}.shape"), Val::List(o))), end))
 }
 
 /// The grob a `\tweak` meets at `k`.

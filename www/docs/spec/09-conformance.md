@@ -1183,7 +1183,13 @@ version 7) and a margin.
   (`a_fermata_and_a_fingering_stand_outside_the_slur`); a phrasing slur
   round the slur under it
   (`a_phrasing_slur_goes_round_the_slur_under_it`); the ties where they
-  were (`ties_are_left_as_they_were`).
+  were (`ties_are_left_as_they_were`). `\shape` moves the four control
+  points by its offsets, before the note or before the curve, for the
+  next note alone (`shape_moves_the_four_control_points`), a phrasing
+  slur's and a tie's, and each piece of a broken curve
+  (`shape_reaches_phrasing_slurs_ties_and_each_piece_of_a_broken_curve`);
+  one it cannot draw is passed over with a warning
+  (`a_shape_of_another_curve_is_passed_over_with_a_warning`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11

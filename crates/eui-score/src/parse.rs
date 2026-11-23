@@ -5519,9 +5519,21 @@ fn layout_command(toks: &[Tok], i: usize, st: &mut St) -> Result<Option<usize>, 
         }
         "shape" => {
             // `\shape #'((0 . 0) …) Slur`: the curve's offsets, then the grob.
-            let j = value_end(toks, i + 1)?;
-            warn("\\shape is not drawn", at);
-            done(path_end(toks, j))
+            // Before the note the curve starts on, or after it before the
+            // curve itself: each control point moved by its offset.
+            let (setting, end) = crate::look::shape(toks, i)?;
+            let Some((key, v)) = setting else {
+                warn("\\shape is not drawn: it moves a slur's, a phrasing slur's or a tie's four control points", at);
+                return done(end);
+            };
+            let after_note = i > 0 && matches!(toks[i - 1].t, T::Sym('-' | '^' | '_')) && toks[i - 1].at + 1 == at;
+            if after_note {
+                let last = last_item(&mut st.events, &tk)?;
+                last.look = crate::look::with_one(&last.look, key, v);
+            } else {
+                st.look.set_once(key, v);
+            }
+            done(end)
         }
         "transposition" => {
             if !is(toks, i + 1, T::Word) {

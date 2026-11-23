@@ -24,6 +24,14 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- `\shape` is drawn (score #1019): `\shape #'((dx1 . dy1) (dx2 . dy2)
+  (dx3 . dy3) (dx4 . dy4)) Slur` before the note a curve starts on, or
+  `-\shape #'(…) (` before the curve itself, moves the four control points
+  of a slur, a phrasing slur (`PhrasingSlur`, `\(`) or a tie (`Tie`, `~`)
+  by its offsets, in staff spaces, from where the engraver put them. A
+  curve a line break parts takes a list of such lists, one for each piece;
+  a single list is its first piece's. It was passed over with a warning,
+  as a `\shape` of any other curve still is.
 - `\paper`'s `top-markup-spacing`, `score-markup-spacing` and
   `markup-markup-spacing` are read and laid out (score #1025), each by its
   `basic-distance`, `minimum-distance` and `padding`, as LilyPond measures
