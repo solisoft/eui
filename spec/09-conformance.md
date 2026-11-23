@@ -1147,6 +1147,16 @@ version 7) and a margin.
   `printPartCombineTexts = ##f` and an empty text print nothing, the
   note's own words staying
   (`the_texts_are_not_printed_when_the_context_says_so`).
+- **An instrument changes in the middle of a staff** (03 §1.4; score
+  #1023), in `crates/eui-score/tests/instrument_change.rs`: a flute takes
+  the piccolo — program, pitch and names from there
+  (`a_flute_takes_the_piccolo_in_the_middle_of_its_staff`); a clarinet in
+  B flat the one in A (`a_clarinet_in_b_flat_takes_the_one_in_a`); a
+  setting holds from where it is written, and before the first note it is
+  the staff's (`a_setting_holds_from_where_it_is_written_and_not_before`);
+  a change in one voice is the staff's at that moment, another staff and
+  a drum staff untouched
+  (`a_change_in_one_voice_is_the_staffs_at_that_moment`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11

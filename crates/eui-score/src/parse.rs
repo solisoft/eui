@@ -1449,7 +1449,9 @@ pub struct Props {
     pub string_tunings: Vec<i64>,
     /// `\transposition`: the semitones the staff sounds from where it is
     /// written — -12 for `\transposition c`, -2 for a B flat clarinet's
-    /// `\transposition bes`.
+    /// `\transposition bes`. This, the names and `midiInstrument` are what
+    /// the staff says where it starts: one written after its first note
+    /// holds from there ([`crate::look::changes`]; score #1023).
     pub transposition: i64,
     /// The layout settings its `\with` honours: `\override`, `\set`,
     /// `\RemoveEmptyStaves` …
@@ -2631,6 +2633,7 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
         after_words.extend(lines);
     }
     let mut parsed = Parsed { header: st.header, paper: st.paper, staves, groups, warnings: Vec::new(), spacing: SpacingSpanner::default(), written: crate::written::Written::default(), after_words };
+    crate::look::at_start(&mut parsed.staves);
     // What layout gets, counted whole: each staff as long as the longest.
     parsed.written = crate::written::finished(&parsed);
     parsed.written.within(parsed.staves.first().and_then(|s| s.events.first()).map_or(0, |e| e.at))?;
@@ -5294,7 +5297,24 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         let staff =
             toks.get(i + 1).is_some_and(|t| t.t == T::Word && t.v == "Staff") && is(toks, i + 2, T::Sym('.')) && toks.get(i + 3).is_some_and(|t| t.t == T::Word && STAFF_PROPS.contains(&t.v.as_str()));
         if staff {
-            return staff_prop(toks, i + 3, &mut st.props, "\\set Staff");
+            // In force from here (score #1023): a name, a sound. What is
+            // set before the first note is the staff's own (`look::at_start`).
+            let mut set = Props::default();
+            let j = staff_prop(toks, i + 3, &mut set, "\\set Staff")?;
+            for (key, value) in
+                [(crate::look::INSTRUMENT_NAME, set.instrument_name), (crate::look::SHORT_INSTRUMENT_NAME, set.short_instrument_name), (crate::look::MIDI_INSTRUMENT, set.midi_instrument)]
+            {
+                if let Some(value) = value {
+                    st.look.set_staff(key, crate::look::Val::Sym(value));
+                }
+            }
+            if set.midi_maximum_volume.is_some() {
+                st.props.midi_maximum_volume = set.midi_maximum_volume;
+            }
+            if set.midi_pan_position.is_some() {
+                st.props.midi_pan_position = set.midi_pan_position;
+            }
+            return Ok(j);
         }
         // `\set Staff.autoBeaming = ##f`: beams only where written.
         let j = path_end(toks, i + 1);
@@ -5492,7 +5512,9 @@ fn layout_command(toks: &[Tok], i: usize, st: &mut St) -> Result<Option<usize>, 
             }
             // The pitch a written middle C sounds: what the staff plays.
             let Some((step, alter)) = pitch_name_in(st.lang, &toks[i + 1].v) else { return refuse("\\transposition wants a pitch", at) };
-            st.props.transposition = semitones(step + 7 * toks[i + 1].marks, alter) - semitones(7, 0);
+            // From here on (score #1023); the staff's own before its first note.
+            let sounds = semitones(step + 7 * toks[i + 1].marks, alter) - semitones(7, 0);
+            st.look.set_staff(crate::look::TRANSPOSITION, crate::look::Val::Num(sounds as f64));
             done(i + 2)
         }
         "compressFullBarRests" => {

@@ -1153,7 +1153,10 @@ the staves. Groups nest. `\new Staff \with { instrumentName = "Flûte"
 shortInstrumentName = "Fl." midiInstrument = "flute" }`, or `\set
 Staff.instrumentName = …` in the music, names a staff: the name stands left
 of the first line, the short name of the others, hanging into the margin on
-paper as LilyPond's do. `\score { … \layout { } \midi { } }` is read as
+paper as LilyPond's do. Written after the staff's first note, a name, a
+`midiInstrument` or a `\transposition` holds from there — an instrument
+changed in the middle of the staff: the lines after take the new short
+name, the MIDI its program and its pitch. `\score { … \layout { } \midi { } }` is read as
 LilyPond writes it. Each staff is measured and spaced on its own, then all
 share LilyPond's columns — every moment any staff starts a note on is one,
 spaced for the shortest note sounding across it — and are broken into

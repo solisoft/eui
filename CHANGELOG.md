@@ -24,6 +24,16 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- An instrument changed in the middle of a staff (score #1023): `\set
+  Staff.instrumentName`, `shortInstrumentName` and `midiInstrument`, and
+  `\transposition`, hold from where they are written. The systems after
+  take the new short name — a system the new name starts takes it in full,
+  as LilyPond's — the MIDI changes its program there, and the notes after
+  sound where the new instrument does: a flute taking the piccolo
+  (`\transposition c''`), a clarinet in B flat the one in A. The last one
+  written was the whole staff's, from its first bar. What is written
+  before a staff's first note is still the staff's own; in `<< … \\ … >>`
+  a change in one voice is the staff's at that moment.
 - `\partCombine`'s words are the ones the context sets (score #1021):
   `aDueText`, `soloText` and `soloIIText` — `\set Staff.soloText = "1."`
   before the pair or inside either part (from where it is written, the

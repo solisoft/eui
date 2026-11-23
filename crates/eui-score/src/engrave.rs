@@ -2701,6 +2701,18 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
     let e = em(0.0);
     let names: Vec<String> = staves_src.iter().map(|s| s.props.instrument_name.clone().unwrap_or_default()).chain(parsed.groups.iter().map(|g| g.name.clone())).collect();
     let shorts: Vec<String> = staves_src.iter().map(|s| s.props.short_instrument_name.clone().unwrap_or_default()).chain(parsed.groups.iter().map(|g| g.short.clone())).collect();
+    // The names an instrument changed in the middle of its staff brings to
+    // the systems after (score #1023): room for the widest.
+    let later: Vec<String> = staves_src
+        .iter()
+        .flat_map(|s| [crate::look::INSTRUMENT_NAME, crate::look::SHORT_INSTRUMENT_NAME].into_iter().flat_map(|key| crate::look::changes(&s.events, key)))
+        .filter(|c| c.0 > 0)
+        .filter_map(|c| match c.1 {
+            crate::look::Val::Sym(name) => Some(name),
+            _ => None,
+        })
+        .collect();
+    let shorts: Vec<String> = shorts.into_iter().chain(later).collect();
     let name_w = names.iter().map(|nm| if nm.is_empty() { 0.0 } else { text_width(nm, Weight::Regular, e) + 1.0 }).fold(0.0, f64::max);
     let short_w = shorts.iter().map(|nm| if nm.is_empty() { 0.0 } else { text_width(nm, Weight::Regular, e) + 1.0 }).fold(0.0, f64::max);
     let left = layout.left.unwrap_or(0.0);
@@ -2800,6 +2812,23 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
     })
 }
 
+/// The name left of a staff on the system that starts `tick` into it
+/// (score #1023): the instrument's name on the first system and on one a
+/// new name starts, as LilyPond's, its short name on the others — each the
+/// one in force there, an instrument changed since being the new one.
+fn staff_name(stf: &crate::parse::Staff, tick: i64, first_line: bool) -> String {
+    use crate::look::{changes, in_force, Val, INSTRUMENT_NAME, SHORT_INSTRUMENT_NAME};
+    let word = |v: Option<&Val>, own: &Option<String>| match v {
+        Some(Val::Sym(s)) => s.clone(),
+        _ => own.clone().unwrap_or_default(),
+    };
+    let long = changes(&stf.events, INSTRUMENT_NAME);
+    if first_line || long.iter().any(|c| c.0 == tick && tick > 0) {
+        return word(in_force(&long, tick), &stf.props.instrument_name);
+    }
+    word(in_force(&changes(&stf.events, SHORT_INSTRUMENT_NAME), tick), &stf.props.short_instrument_name)
+}
+
 /// The staves of a system one under the other, each at its natural
 /// distance from the one above; the springs between them (one a staff after
 /// the first: from the staff before it), which the page squeezes or
@@ -2850,7 +2879,7 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
     let last = (0..offsets.len()).rev().find(|&s| !gone(s)).unwrap_or(offsets.len() - 1);
     let high = (0..reaches.len()).filter(|&s| !idle(s) && !gone(s)).map(|s| offsets[s] + reaches[s].0).fold(f64::INFINITY, f64::min);
     sys.reach = Some((if high.is_finite() { high } else { reaches[0].0 }, offsets[last] + reaches[last].1));
-    sys.names = staves.iter().map(|stf| if sys.first_line { stf.props.instrument_name.clone().unwrap_or_default() } else { stf.props.short_instrument_name.clone().unwrap_or_default() }).collect();
+    sys.names = staves.iter().enumerate().map(|(s, stf)| staff_name(stf, sys.lines.get(s).and_then(|l| all.get(s)?.get(l.bars.start)).map_or(0, |b| b.tick0), sys.first_line)).collect();
     sys.offsets = offsets;
     connect(sys, groups);
     springs

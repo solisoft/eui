@@ -621,11 +621,22 @@ construct as LilyPond 2.25 draws it:
   to eight strings, six in standard tuning otherwise; a group's
   `systemStartDelimiter` (`#'SystemStartSquare`, a square bracket);
   `\transposition`, played — the staff sounds that far from where it is
-  written; `\midi { \tempo 4 = 100 }`, the speed of a source whose music
+  written, from where it is written (score #1023); `\midi { \tempo 4 = 100 }`, the speed of a source whose music
   writes no `\tempo`, over the host's. A `\markup` command the engraver
   does not draw (`\epsfile`) is passed over with a warning and its words
   kept; `\stopStaff` and `\startStaff` are passed over with a warning,
   as are lyrics sung to a voice nobody named.
+  An instrument changed in the middle of a staff (score #1023): `\set
+  Staff.instrumentName`, `shortInstrumentName` and `midiInstrument`, as
+  `\transposition`, hold from where they are written — the moment the
+  next note or rest sounds, whatever voice writes it. Written before the
+  staff's first note they are the staff's own, over its `\with`'s. A
+  system after the first shows the short name in force where it starts,
+  and the name in full where a new `instrumentName` starts with it, as
+  LilyPond's; the MIDI track changes its program at the change, when the
+  name is one of LilyPond's and not the one playing, and each note
+  sounds as far from where it is written as `\transposition` says by
+  then. A drum staff is not transposed. A staff alone has no name drawn.
   A `\markup` after the last score — a song's verses — is set under the
   last system: each item of a `\column` a line, at the left, three staff
   spaces from baseline to baseline, a line the page has no room for on

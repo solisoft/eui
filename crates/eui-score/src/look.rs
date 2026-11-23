@@ -739,6 +739,13 @@ impl LookState {
         }
     }
 
+    /// A staff's own setting, in force from here: an instrument's name,
+    /// its sound, its transposition (score #1023).
+    pub(crate) fn set_staff(&mut self, key: &str, v: Val) {
+        self.cached = None;
+        self.staff.insert(key.to_owned(), v);
+    }
+
     /// Set a voice's own settings back, at the end of the voice.
     pub(crate) fn restore_voice(&mut self, voice: Map) {
         self.cached = None;
@@ -1030,6 +1037,88 @@ pub(crate) fn with_or_without(look: &Look, key: &str, v: Option<Val>) -> Look {
         None => m.remove(key),
     };
     Look::of(m)
+}
+
+// ---- An instrument changed in the middle of a staff ---------------------------------
+
+/// `instrumentName`, in force from where `\set Staff.instrumentName` is
+/// written (score #1023).
+pub const INSTRUMENT_NAME: &str = "instrumentName";
+/// `shortInstrumentName`, the same way.
+pub const SHORT_INSTRUMENT_NAME: &str = "shortInstrumentName";
+/// `midiInstrument`, the same way.
+pub const MIDI_INSTRUMENT: &str = "midiInstrument";
+/// `\transposition`, in semitones, the same way.
+pub const TRANSPOSITION: &str = "transposition";
+
+/// Where a staff's setting `key` changes, in ticks from the staff's start,
+/// and what to — in time order. A note or a rest carries what was in force
+/// where it is written; the voices of `<< >>` are read one after the
+/// other, so a change is where the value turns from the one read just
+/// before, at the moment that note sounds. A note that says nothing of
+/// `key` (a rest put in to fill a staff) changes nothing.
+pub fn changes(events: &[Ev], key: &str) -> Vec<(i64, Val)> {
+    let mut out: Vec<(i64, Val)> = Vec::new();
+    let mut before: Option<&Val> = None;
+    let mut seen: *const Map = std::ptr::null();
+    // Where the voices of `<< >>` start, and where the first ends.
+    let (mut t, mut from, mut to) = (0i64, 0i64, None);
+    for ev in events {
+        match ev.k {
+            Kind::Voices => (from, to) = (t, None),
+            Kind::VoiceNext => {
+                to.get_or_insert(t);
+                t = from;
+            }
+            Kind::VoicesEnd => t = to.take().unwrap_or(t),
+            Kind::Note | Kind::Rest => {
+                // The same settings as the note before: nothing new.
+                let own: *const Map = ev.look.map().map_or(std::ptr::null(), std::ptr::from_ref);
+                if own != seen {
+                    seen = own;
+                    if let Some(now) = ev.look.get(key) {
+                        if before != Some(now) {
+                            out.push((t, now.clone()));
+                            before = Some(now);
+                        }
+                    }
+                }
+                t += crate::parse::span(ev);
+            }
+            _ => {}
+        }
+    }
+    out.sort_by_key(|c| c.0);
+    out
+}
+
+/// What `changes` say is in force at `t`: the last change at `t` or before.
+pub fn in_force(changes: &[(i64, Val)], t: i64) -> Option<&Val> {
+    changes.iter().take_while(|c| c.0 <= t).last().map(|c| &c.1)
+}
+
+/// A staff's settings where it starts: what its music sets before its
+/// first note is the staff's own, over its `\with`'s.
+pub(crate) fn at_start(staves: &mut [crate::parse::Staff]) {
+    for stf in staves {
+        let first = |key: &str| changes(&stf.events, key).into_iter().find(|c| c.0 == 0).map(|c| c.1);
+        let word = |key: &str| match first(key) {
+            Some(Val::Sym(s)) => Some(s),
+            _ => None,
+        };
+        if let Some(name) = word(INSTRUMENT_NAME) {
+            stf.props.instrument_name = Some(name);
+        }
+        if let Some(name) = word(SHORT_INSTRUMENT_NAME) {
+            stf.props.short_instrument_name = Some(name);
+        }
+        if let Some(name) = word(MIDI_INSTRUMENT) {
+            stf.props.midi_instrument = Some(name);
+        }
+        if let Some(Val::Num(n)) = first(TRANSPOSITION) {
+            stf.props.transposition = n as i64;
+        }
+    }
 }
 
 // ---- \with and \layout -----------------------------------------------------------

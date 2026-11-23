@@ -50,7 +50,16 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
         let name = props.instrument_name.clone().unwrap_or_else(|| if si == 0 { title.clone() } else { String::new() });
         // A drum staff plays on General MIDI's percussion channel, the tenth.
         let channel = if stf.kind == StaffKind::Drums { 9 } else { (if si < 9 { si } else { si + 1 }).min(15) as i64 };
-        let track = track(&measured[si], opts, &holds, program, &name, channel, tracks.is_empty(), if channel == 9 { 0 } else { props.transposition });
+        // An instrument changed in the middle of the staff (score #1023):
+        // its program and its transposition from where each is written.
+        // Drums have neither.
+        let voice = Voice {
+            program,
+            transposition: if channel == 9 { 0 } else { props.transposition },
+            programs: if channel == 9 { Vec::new() } else { crate::look::changes(&stf.events, crate::look::MIDI_INSTRUMENT) },
+            transpositions: if channel == 9 { Vec::new() } else { crate::look::changes(&stf.events, crate::look::TRANSPOSITION) },
+        };
+        let track = track(&measured[si], opts, &holds, &voice, &name, channel, tracks.is_empty());
         let mut controls: Vec<u8> = Vec::new();
         if let Some(v) = props.midi_maximum_volume {
             controls.extend([0, (176 + channel) as u8, 7, (v.clamp(0.0, 1.0) * 127.0 + 0.5) as u8]);
@@ -89,8 +98,32 @@ struct Hairpin {
     step: f64,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], program: i64, name: &str, channel: i64, first_track: bool, transposition: i64) -> Vec<u8> {
+/// What a staff sounds as: its General MIDI program and how far from
+/// where it is written, at its start, and where each changes after.
+struct Voice {
+    program: i64,
+    transposition: i64,
+    programs: Vec<(i64, crate::look::Val)>,
+    transpositions: Vec<(i64, crate::look::Val)>,
+}
+
+/// The notes struck and let go in `ev_out` from `from` on, `by` semitones
+/// from where they are written (`\transposition`).
+fn transpose(ev_out: &mut [(i64, i64, Vec<u8>)], from: usize, by: i64) {
+    if by == 0 {
+        return;
+    }
+    for e in ev_out.iter_mut().skip(from) {
+        if let [status, key, ..] = e.2.as_mut_slice() {
+            if matches!(*status & 0xF0, 0x80 | 0x90) {
+                *key = (i64::from(*key) + by).clamp(0, 127) as u8;
+            }
+        }
+    }
+}
+
+fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], voice: &Voice, name: &str, channel: i64, first_track: bool) -> Vec<u8> {
+    let program = voice.program;
     let mut ev_out: Vec<(i64, i64, Vec<u8>)> = Vec::new();
     if !name.is_empty() {
         let mut meta = vec![255, 3];
@@ -103,13 +136,19 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], program: i64, name: &
         ev_out.push((0, 0, tempo(opts.bpm, opts.beat)));
     }
     let mut at = 0;
+    // From which of `ev_out` the notes are still as written, and how far
+    // from it they sound.
+    let mut shift = (0, 0);
     let mut volume: f64 = 90.0;
     let mut hairpin: Option<Hairpin> = None;
     let mut sounding: Vec<(i64, Sounding)> = Vec::new();
     // The notes left out of the staff tie among themselves: a part's own
     // tie, not one to the note drawn on the same key.
     let mut sounding_unseen: Vec<(i64, Sounding)> = Vec::new();
+    // Each bar's ticks from the staff's start, as written and as played.
+    let mut starts: Vec<(i64, i64)> = Vec::with_capacity(bars.len());
     for (bi, bar) in bars.iter().enumerate() {
+        starts.push((bar.tick0, at));
         // A metre changed in the middle of the bar before shows at none.
         if bi == 0 || bar.changes.time || bar.time != bars[bi - 1].time {
             ev_out.push((at, 0, vec![255, 88, 4, bar.time.0 as u8, log2(bar.time.1) as u8, 24, 8]));
@@ -119,6 +158,14 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], program: i64, name: &
         }
         for ev in &bar.items {
             let t0 = at + ev.start;
+            // What the item before struck sounds where its instrument
+            // does; this one's, where the staff's is by now.
+            transpose(&mut ev_out, shift.0, shift.1);
+            let sounds = match crate::look::in_force(&voice.transpositions, bar.tick0 + ev.start) {
+                Some(crate::look::Val::Num(n)) => *n as i64,
+                _ => voice.transposition,
+            };
+            shift = (ev_out.len(), sounds);
             let span = ev.ticks * ev.mm.unwrap_or(1);
             if let Some(mark) = &ev.tempo {
                 if mark.bpm > 0 && first_track {
@@ -190,23 +237,25 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], program: i64, name: &
         }
         at += bar.length * bar.span.unwrap_or(1);
     }
+    transpose(&mut ev_out, shift.0, shift.1);
+    // The program where the staff takes another instrument: one this
+    // knows, and not the one it has.
+    let mut current = program;
+    for (t, name) in &voice.programs {
+        let crate::look::Val::Sym(name) = name else { continue };
+        let Some(next) = program_of(name).filter(|next| *next != current) else { continue };
+        current = next;
+        if *t > 0 {
+            let at = starts.iter().rev().find(|s| s.0 <= *t).map_or(*t, |s| s.1 + (*t - s.0));
+            ev_out.push((at, 0, vec![(192 + channel) as u8, next as u8]));
+        }
+    }
     if !holds.is_empty() {
         for e in &mut ev_out {
             // A note let go where a fermata ends is let go once it is held;
             // what starts there waits for the breath too (score #977).
             let off = e.2.first().is_some_and(|b| b & 0xF0 == 0x80);
             e.0 = held(holds, e.0, off);
-        }
-    }
-    if transposition != 0 {
-        // `\transposition`: every note of the staff sounds that far from
-        // where it is written.
-        for e in &mut ev_out {
-            if let [status, key, ..] = e.2.as_mut_slice() {
-                if matches!(*status & 0xF0, 0x80 | 0x90) {
-                    *key = (i64::from(*key) + transposition).clamp(0, 127) as u8;
-                }
-            }
         }
     }
     ev_out.sort_by_key(|e| e.0 * 4 + e.1);
