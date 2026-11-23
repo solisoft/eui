@@ -130,6 +130,39 @@ fn the_other_ornaments_and_fermatas_are_drawn_in_their_own_signs() {
 }
 
 #[test]
+fn wide_ornaments_on_neighbouring_notes_keep_apart() {
+    for (src, n) in [
+        (r"{ c''4\prallmordent c''\upprall c''\lineprall c''\prallprall }", 4),
+        (r"{ c''8\prallmordent c''\upprall c''\lineprall c''\prallprall c''\prallmordent c''\upprall c''\lineprall c''\prallprall }", 8),
+    ] {
+        let e = eng(src);
+        let line = &e.systems[0].lines[0];
+        let mut boxes: Vec<(f64, f64, bool)> = line
+            .scripts
+            .iter()
+            .map(|sc| {
+                let b = eui_score::glyphs::glyph(sc.glyph).bbox;
+                let x0 = sc.x - (b[2] - b[0]) / 2.0;
+                (x0, x0 + b[2] - b[0], sc.y < 2.0)
+            })
+            .collect();
+        boxes.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(boxes.len(), n);
+        for pair in boxes.windows(2) {
+            if pair[0].2 == pair[1].2 {
+                assert!(pair[1].0 - pair[0].1 >= 0.25, "{src}: {pair:?}");
+            }
+        }
+    }
+    // A staccato or an accent, no wider than its head, spaces nothing; nor a
+    // fermata with no wide neighbour.
+    for (bare, marked) in [(r"{ c''8 d'' e'' f'' g'' a'' b'' c''' }", r"{ c''8-. d''-> e''-. f''-> g''-- a''-. b''-> c'''-. }"), (r"{ c''8 d'' e'' f'' }", r"{ c''8 d''\fermata e'' f'' }")] {
+        let xs = |src: &str| items(&eng(src)).iter().map(|ev| ev.x).collect::<Vec<_>>();
+        assert_eq!(xs(bare), xs(marked), "{marked}");
+    }
+}
+
+#[test]
 fn a_reverse_turn_and_a_double_prall_are_played() {
     let q = quarter(r"{ c'4 }");
     let turn: Vec<u8> = played(r"{ c''4\reverseturn }").iter().map(|n| n.0).collect();

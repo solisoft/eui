@@ -203,6 +203,10 @@ release. A wire change lands here first, is released, and then the pin moves.
   appended to the glyph table through `xtask smufl`. A reverse turn and a
   double prall are played as the turn and the prall are; each fermata holds
   for its length, from a quarter of `\fermata`'s hold to twice it.
+- Two scripts wider than their heads on neighbouring notes of a voice —
+  `\prallmordent` then `\upprall`, two fermatas — keep 0.3 space apart:
+  the notes make room for them (score #1026). They ran into each other on
+  quarter notes. Narrower scripts, or a wide one alone, space nothing.
 - A score reads `\new RhythmicStaff`, which was refused (score #1026):
   one line, every note on it — its rhythm drawn, its pitch not — stems
   and beams up, no clef, key or accidental; alone or beside other staves.

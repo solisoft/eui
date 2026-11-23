@@ -798,6 +798,7 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
             change_room(ev);
             lyric_room(ev);
         }
+        script_room(bar);
         if beamed(kind) {
             let lists = voice_lists(bar);
             crate::breaking::optical(bar, &lists);
@@ -867,6 +868,31 @@ fn lyric_room(ev: &mut Ev) {
         let after = if lyr.hyphen { 0.9 } else { 0.35 };
         ev.right = ev.right.max(c + w / 2.0 + after);
         ev.left = ev.left.max(w / 2.0 - c + 0.35);
+    }
+}
+
+/// Room for scripts wider than their notes' heads on neighbouring notes of
+/// a voice (score #1026): each centred on its head, as `marks::scripts`
+/// sets it, with 0.15 space beyond it — so the two keep 0.3 apart, as
+/// LilyPond keeps \prallmordent \upprall from running into each other. A
+/// script no wider than its head, or a wide one with no wide neighbour,
+/// takes no room: spacing is as it was.
+fn script_room(bar: &mut Bar) {
+    let wide = |ev: &Ev| -> Option<f64> {
+        let w = ev.scripts.iter().map(|sc| marks::script_width(&sc.name)).fold(0.0, f64::max);
+        (ev.k == Kind::Note && w > ev.head_w.unwrap_or(0.0)).then_some(w)
+    };
+    for list in voice_lists(bar) {
+        for pair in list.windows(2) {
+            let (Some(&a), Some(&b)) = (pair.first(), pair.last()) else { continue };
+            let (Some(wa), Some(wb)) = (wide(&bar.items[a]), wide(&bar.items[b])) else { continue };
+            let ea = &mut bar.items[a];
+            let c = ea.head_w.unwrap_or(0.0) / 2.0;
+            ea.right = ea.right.max(c + wa / 2.0 + 0.15);
+            let eb = &mut bar.items[b];
+            let c = eb.head_w.unwrap_or(0.0) / 2.0;
+            eb.left = eb.left.max(wb / 2.0 - c + 0.15);
+        }
     }
 }
 

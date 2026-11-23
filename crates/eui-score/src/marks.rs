@@ -232,6 +232,16 @@ struct ScriptRule {
     quant: bool,
 }
 
+/// How wide a script is drawn: the wider of its two signs' ink.
+pub(crate) fn script_width(name: &str) -> f64 {
+    let rule = script_rule(name);
+    let ink = |g: &str| {
+        let b = glyph(g).bbox;
+        b[2] - b[0]
+    };
+    ink(rule.up).max(ink(rule.down))
+}
+
 fn script_rule(name: &str) -> ScriptRule {
     let r = |up, down, pad, prio, side, quant| ScriptRule { up, down, pad, prio, side, quant };
     match name {
