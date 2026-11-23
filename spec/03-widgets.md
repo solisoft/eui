@@ -622,6 +622,14 @@ construct as LilyPond 2.25 draws it:
   the bass on one of five strings or more tuned upward, in any order on a
   ukulele, a mandolin or a banjo — and `\fret-diagram "w:4;…"` and a
   `\fret-diagram-terse` spec of three to eight strings draw that many.
+- *Shape notes* (score #1026): `\aikenHeads`, `\aikenThinHeads`,
+  `\sacredHarpHeads`, `\southernHarmonyHeads`, `\funkHeads`,
+  `\walkerHeads`, each with its `…Minor`, and `\set shapeNoteStyles =
+  ##(do re mi fa #f la ti)`: each head of a note shaped by its degree from
+  the tonic of the `\key` in force (C before any) — the minor sets count
+  that tonic as la, the major ones as do, as LilyPond's do — in
+  Emmentaler's shape-note glyphs (`noteheads.s2do`, `u2fa`/`d2fa` by the
+  stem); `#f` is the usual head, `\unset shapeNoteStyles` ends them.
 - *Files as they are written* (score #1031, #1032): a context named by a
   bare word (`\context Voice = V`); a `\new Voice` holding its own
   `\new Lyrics`, which makes its staff; a variable in a lyric block's

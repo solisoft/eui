@@ -1152,6 +1152,10 @@ pub struct Ev {
     pub clef: Clef,
     /// `\key`'s fifths.
     pub fifths: i64,
+    /// `\key`'s tonic, as a step (0 C … 6 B); on a note, the one in force
+    /// where it is written (C before any): what shape notes count their
+    /// degrees from (score #1026).
+    pub tonic: i64,
     /// `\time`'s numerator and denominator.
     pub time: (i64, i64),
     /// An additive metre's parts, `2+3/8` as `[2, 3, 0, 0]`; zeros for one figure.
@@ -2306,7 +2310,7 @@ fn pedal_words(ev: &mut Ev, cc: u8, run: Run) {
 }
 
 /// The commands that only switch a layout setting on or off, passed over.
-const SWITCHES: [&str; 98] = [
+const SWITCHES: [&str; 110] = [
     "slurUp",
     "slurDown",
     "slurNeutral",
@@ -2377,6 +2381,18 @@ const SWITCHES: [&str; 98] = [
     "xNotesOff",
     "deadNotesOn",
     "deadNotesOff",
+    "aikenHeads",
+    "aikenHeadsMinor",
+    "aikenThinHeads",
+    "aikenThinHeadsMinor",
+    "sacredHarpHeads",
+    "sacredHarpHeadsMinor",
+    "southernHarmonyHeads",
+    "southernHarmonyHeadsMinor",
+    "funkHeads",
+    "funkHeadsMinor",
+    "walkerHeads",
+    "walkerHeadsMinor",
     "germanChords",
     "semiGermanChords",
     "italianChords",
@@ -3773,6 +3789,17 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         let events = ossia_events(&st.events, std::mem::take(&mut st.ossias))?;
         staves.push(Staff { kind: StaffKind::Ossia, events, props: st.ossia_props.take().unwrap_or_default(), lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: Vec::new(), name: None });
     }
+    // Each note knows its key's tonic, for its shape (`look::shape_head`).
+    let mut tonic = 0;
+    for ev in &mut st.events {
+        if ev.k == Kind::Key {
+            tonic = ev.tonic;
+        }
+        ev.tonic = tonic;
+        for g in ev.graces.iter_mut().chain(ev.after_graces.iter_mut()) {
+            g.tonic = tonic;
+        }
+    }
     if kind == StaffKind::FretBoards {
         // Each chord's shape on the guitar, or on the strings
         // `stringTunings` gives (score #1026), its lowest note the bass; a
@@ -4814,7 +4841,7 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             if !(-7..=7).contains(&fifths) {
                 return refuse(format!("a key of {fifths} fifths has no signature"), tk.at);
             }
-            st.events.push(Ev { k: Kind::Key, fifths, at: tk.at, ..Ev::default() });
+            st.events.push(Ev { k: Kind::Key, fifths, tonic: tonic.d.rem_euclid(7), at: tk.at, ..Ev::default() });
             return Ok(i + 3);
         }
         "time" => {

@@ -1210,6 +1210,16 @@ version 7) and a margin.
   (`string_numbers_past_six_name_the_strings_a_tuning_has`); a ukulele's
   chords shaped on its four strings, a diagram of four drawn narrower
   (`fret_boards_and_diagrams_have_the_strings_their_tuning_has`).
+- **Shape notes are shaped by their degree** (03 §1.4; score #1026), in
+  `crates/eui-score/tests/shape_notes.rs`: Aiken's seven shapes from the
+  tonic, fa's by its stem, a half's and a whole's, before and after the
+  switch (`aiken_heads_shape_each_degree_of_the_major_scale`); a minor
+  key counted from its tonic, the minor sets from la
+  (`a_minor_key_counts_from_its_tonic_as_lilypond_does`); Sacred Harp,
+  Southern Harmony, thin, funk and Walker heads
+  (`the_four_shape_systems_and_the_other_families`); each head of a chord
+  its own, `\set shapeNoteStyles` with `#f`, `\unset`, drawn
+  (`each_head_of_a_chord_has_its_own_shape_and_set_shape_note_styles_is_read`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11

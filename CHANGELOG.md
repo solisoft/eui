@@ -24,6 +24,12 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- Shape notes (score #1026): `\aikenHeads`, `\aikenThinHeads`,
+  `\sacredHarpHeads`, `\southernHarmonyHeads`, `\funkHeads` and
+  `\walkerHeads`, each with its `…Minor`, and `\set shapeNoteStyles`
+  shape each head by its degree in the key, in Emmentaler's shape-note
+  glyphs; they were refused.
+
 - A tablature draws the details LilyPond draws (score #1026): grace notes'
   frets small before the note's, a dead note (`\deadNote`, `\xNote`,
   `\deadNotesOn`) as a cross on its string, a harmonic's fret between

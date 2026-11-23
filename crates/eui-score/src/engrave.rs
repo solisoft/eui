@@ -934,8 +934,10 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind, tuning: &[i64]) {
                 continue;
             }
             let k = mag(ev);
-            // `\override NoteHead.style`: its head's own width.
-            let hw = glyph(crate::look::head_of(ev).unwrap_or(head_name(ev.base))).advance * k;
+            // `\override NoteHead.style`: its head's own width; a shape
+            // note's, its widest head's.
+            let shaped = ev.heads.iter().filter_map(|h| crate::look::shape_head(ev, h.d, true)).map(|n| glyph(n).advance).fold(None, |a: Option<f64>, w| Some(a.map_or(w, |a| a.max(w))));
+            let hw = shaped.unwrap_or_else(|| glyph(crate::look::head_of(ev).unwrap_or(head_name(ev.base))).advance) * k;
             ev.head_w = Some(hw);
             displace(ev);
             let mut right = hw;

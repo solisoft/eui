@@ -1694,7 +1694,9 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
         let from = pen.paths.len();
         let hx = ev.x + hd.side as f64 * (hw - RULE.stem);
         let y = top + y_of(hd.pos);
-        let name = if hd.style.is_empty() { crate::look::head_of(ev).unwrap_or(head_glyph(ev.base, hd.style)) } else { head_glyph(ev.base, hd.style) };
+        // A drum's head, a shape note's (score #1026), `NoteHead.style`'s, the value's.
+        let name =
+            if hd.style.is_empty() { crate::look::shape_head(ev, hd.d, ev.up).or_else(|| crate::look::head_of(ev)).unwrap_or(head_glyph(ev.base, hd.style)) } else { head_glyph(ev.base, hd.style) };
         pen.glyph_k(name, hx, y, k);
         if let Some(acc) = hd.acc {
             let ax = ev.x + hd.acc_x.unwrap_or(0.0);

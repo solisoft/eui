@@ -305,6 +305,125 @@ const NAMED: &[(&str, &str, f32)] = &[
     ("lyricsElisionNarrow", "ties.lyric.short", 0.0),
 ];
 
+/// Shape-note heads (score #1026): `\aikenHeads`, `\sacredHarpHeads`,
+/// `\southernHarmonyHeads`, `\funkHeads`, `\walkerHeads` and their thin
+/// and minor kin. SMuFL names none of these shapes as LilyPond draws them,
+/// so a face that names its glyphs writes them under its own names — the
+/// `s`ymmetric head, or the one for a stem `u`p or `d`own, of each value
+/// `0` (whole), `1` (half) and `2` (black) — with the engraver's stem
+/// anchors; a SMuFL face has none of them.
+const SHAPE_NOTES: [&str; 109] = [
+    "noteheads.s0do",
+    "noteheads.s1do",
+    "noteheads.s2do",
+    "noteheads.s0doThin",
+    "noteheads.s1doThin",
+    "noteheads.s2doThin",
+    "noteheads.s0re",
+    "noteheads.s1re",
+    "noteheads.s2re",
+    "noteheads.s0reThin",
+    "noteheads.s1reThin",
+    "noteheads.s2reThin",
+    "noteheads.s0mi",
+    "noteheads.s1mi",
+    "noteheads.s2mi",
+    "noteheads.s0miMirror",
+    "noteheads.s1miMirror",
+    "noteheads.s2miMirror",
+    "noteheads.s0miThin",
+    "noteheads.s1miThin",
+    "noteheads.s2miThin",
+    "noteheads.u0fa",
+    "noteheads.d0fa",
+    "noteheads.u1fa",
+    "noteheads.d1fa",
+    "noteheads.u2fa",
+    "noteheads.d2fa",
+    "noteheads.u0faThin",
+    "noteheads.d0faThin",
+    "noteheads.u1faThin",
+    "noteheads.d1faThin",
+    "noteheads.u2faThin",
+    "noteheads.d2faThin",
+    "noteheads.s0sol",
+    "noteheads.s1sol",
+    "noteheads.s2sol",
+    "noteheads.s0la",
+    "noteheads.s1la",
+    "noteheads.s2la",
+    "noteheads.s0laThin",
+    "noteheads.s1laThin",
+    "noteheads.s2laThin",
+    "noteheads.s0ti",
+    "noteheads.s1ti",
+    "noteheads.s2ti",
+    "noteheads.s0tiThin",
+    "noteheads.s1tiThin",
+    "noteheads.s2tiThin",
+    "noteheads.u0doFunk",
+    "noteheads.d0doFunk",
+    "noteheads.u1doFunk",
+    "noteheads.d1doFunk",
+    "noteheads.u2doFunk",
+    "noteheads.d2doFunk",
+    "noteheads.u0reFunk",
+    "noteheads.d0reFunk",
+    "noteheads.u1reFunk",
+    "noteheads.d1reFunk",
+    "noteheads.u2reFunk",
+    "noteheads.d2reFunk",
+    "noteheads.u0miFunk",
+    "noteheads.d0miFunk",
+    "noteheads.u1miFunk",
+    "noteheads.d1miFunk",
+    "noteheads.s2miFunk",
+    "noteheads.u0faFunk",
+    "noteheads.d0faFunk",
+    "noteheads.u1faFunk",
+    "noteheads.d1faFunk",
+    "noteheads.u2faFunk",
+    "noteheads.d2faFunk",
+    "noteheads.s0solFunk",
+    "noteheads.s1solFunk",
+    "noteheads.s2solFunk",
+    "noteheads.s0laFunk",
+    "noteheads.s1laFunk",
+    "noteheads.s2laFunk",
+    "noteheads.u0tiFunk",
+    "noteheads.d0tiFunk",
+    "noteheads.u1tiFunk",
+    "noteheads.d1tiFunk",
+    "noteheads.u2tiFunk",
+    "noteheads.d2tiFunk",
+    "noteheads.s0doWalker",
+    "noteheads.u1doWalker",
+    "noteheads.d1doWalker",
+    "noteheads.u2doWalker",
+    "noteheads.d2doWalker",
+    "noteheads.s0reWalker",
+    "noteheads.u1reWalker",
+    "noteheads.d1reWalker",
+    "noteheads.u2reWalker",
+    "noteheads.d2reWalker",
+    "noteheads.s0miWalker",
+    "noteheads.s1miWalker",
+    "noteheads.s2miWalker",
+    "noteheads.s0faWalker",
+    "noteheads.u1faWalker",
+    "noteheads.d1faWalker",
+    "noteheads.u2faWalker",
+    "noteheads.d2faWalker",
+    "noteheads.s0laWalker",
+    "noteheads.s1laWalker",
+    "noteheads.s2laWalker",
+    "noteheads.s0tiWalker",
+    "noteheads.u1tiWalker",
+    "noteheads.d1tiWalker",
+    "noteheads.u2tiWalker",
+    "noteheads.d2tiWalker",
+];
+
 /// Where a named face's flag meets its stem: its origin is a little in from
 /// the stem's outer edge.
 const NAMED_FLAG_X: f32 = -0.064;
@@ -449,6 +568,17 @@ pub(crate) fn run(path: &str, licence: Option<&str>, braces: Option<&str>) -> Re
         };
         let anchors = own_anchors.iter().map(|(k, x, y)| format!("\"{k}\": [{}, {}]", num(*x), num(-*y))).collect::<Vec<_>>().join(", ");
         rows.push(format!("    \"{glyph}\": {{\"advance\": {}, \"bbox\": [{}], \"anchors\": {{{anchors}}}, \"fill\": [{}]}}", num(advance), list(&bbox), list(&fill.out)));
+    }
+    if named {
+        for own in SHAPE_NOTES {
+            let id = face.glyph_index_by_name(own).ok_or_else(|| format!("{path}: no glyph named {own}"))?;
+            let mut fill = Fill { per_space, shift: 0.0, out: Vec::new() };
+            let bbox = face.outline_glyph(id, &mut fill).ok_or_else(|| format!("{path}: {own} has no outline"))?;
+            let advance = face.glyph_hor_advance(id).map_or(0.0, |a| f32::from(a) / per_space);
+            let bbox = [f32::from(bbox.x_min) / per_space, -f32::from(bbox.y_max) / per_space, f32::from(bbox.x_max) / per_space, -f32::from(bbox.y_min) / per_space];
+            let anchors = format!("\"stemUpSE\": [{}, {}], \"stemDownNW\": [{}, {}]", num(advance), num(-NAMED_STEM_Y), num(0.0), num(NAMED_STEM_Y));
+            rows.push(format!("    \"{own}\": {{\"advance\": {}, \"bbox\": [{}], \"anchors\": {{{anchors}}}, \"fill\": [{}]}}", num(advance), list(&bbox), list(&fill.out)));
+        }
     }
     // A piano staff's braces, from the face that holds nothing else, keyed
     // `brace<n>` by their place in it.

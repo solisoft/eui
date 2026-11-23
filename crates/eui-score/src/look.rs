@@ -205,7 +205,7 @@ const WIDE: [&str; 11] = ["Score", "Staff", "PianoStaff", "GrandStaff", "StaffGr
 
 /// The context properties `\set` is honoured for, and whether they are a
 /// staff's (or the score's) rather than a voice's.
-const CONTEXT_PROPS: [(&str, bool); 13] = [
+const CONTEXT_PROPS: [(&str, bool); 14] = [
     ("fontSize", false),
     ("subdivideBeams", true),
     ("baseMoment", true),
@@ -220,6 +220,8 @@ const CONTEXT_PROPS: [(&str, bool); 13] = [
     (SOLO_TEXT, true),
     (SOLO_II_TEXT, true),
     (PRINT_PART_TEXTS, true),
+    // A head's shape by its degree (score #1026): a voice's.
+    (SHAPE_NOTE_STYLES, false),
 ];
 
 /// `aDueText`: what a combined pair says where its parts come together.
@@ -274,7 +276,7 @@ fn honoured(key: &str, v: &Val) -> bool {
         return match prop.0 {
             "fontSize" | "currentBarNumber" | "baseMoment" => matches!(v, Val::Num(_)),
             "subdivideBeams" | PRINT_PART_TEXTS => matches!(v, Val::Bool(_)),
-            A_DUE_TEXT | SOLO_TEXT | SOLO_II_TEXT => matches!(v, Val::Sym(_)),
+            A_DUE_TEXT | SOLO_TEXT | SOLO_II_TEXT | SHAPE_NOTE_STYLES => matches!(v, Val::Sym(_)),
             "beatStructure" | "beamExceptions" => matches!(v, Val::List(_)),
             "barNumberVisibility" => matches!(v, Val::Sym(_) | Val::List(_)),
             _ => matches!(v, Val::Sym(s) if formatter(s).is_some()),
@@ -554,6 +556,21 @@ fn value_for(key: &str, d: &Sx) -> Option<Val> {
             Sx::Word(w) => Val::Sym(w.clone()),
             _ => return None,
         },
+        // `##(do re mi fa #f la ti)`: each degree's style, `#f` the usual head's.
+        SHAPE_NOTE_STYLES => match d {
+            Sx::List(items) if items.len() == 7 => Val::Sym(
+                items
+                    .iter()
+                    .map(|x| match x {
+                        Sx::Word(w) => Some(w.clone()),
+                        Sx::Bool(false) => Some("-".to_owned()),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<String>>>()?
+                    .join(" "),
+            ),
+            _ => return None,
+        },
         "beatStructure" => match d {
             Sx::List(items) => Val::List(items.iter().map(as_num).collect::<Option<Vec<f64>>>()?),
             _ => return None,
@@ -801,6 +818,7 @@ fn switch(word: &str) -> Option<Vec<(&'static str, Option<Val>)>> {
     Some(match word {
         "numericTimeSignature" => vec![("TimeSignature.style", sym("numbered"))],
         "defaultTimeSignature" => vec![("TimeSignature.style", None)],
+        w if shape_styles(w).is_some() => vec![(SHAPE_NOTE_STYLES, shape_styles(w).map(|s| Val::Sym(s.to_owned())))],
         "xNotesOn" | "deadNotesOn" => vec![("NoteHead.style", sym("cross"))],
         "xNotesOff" | "deadNotesOff" => vec![("NoteHead.style", None)],
         "harmonicsOn" => vec![("NoteHead.style", sym("harmonic"))],
@@ -809,6 +827,48 @@ fn switch(word: &str) -> Option<Vec<(&'static str, Option<Val>)>> {
         "RemoveAllEmptyStaves" => vec![("VerticalAxisGroup.remove-empty", Some(Val::Bool(true))), ("VerticalAxisGroup.remove-first", Some(Val::Bool(true)))],
         _ => return None,
     })
+}
+
+/// `shapeNoteStyles`: a head's shape for each degree of the key, from its
+/// tonic, as words — `-` for the usual head (score #1026).
+pub(crate) const SHAPE_NOTE_STYLES: &str = "shapeNoteStyles";
+
+/// What LilyPond's shape-note switches set `shapeNoteStyles` to
+/// (`property-init.ly`): the major sets count from the key's tonic as do,
+/// the minor ones as la.
+fn shape_styles(word: &str) -> Option<&'static str> {
+    Some(match word {
+        "aikenHeads" => "do re miMirror fa sol la ti",
+        "aikenHeadsMinor" => "la ti do re miMirror fa sol",
+        "aikenThinHeads" => "doThin reThin miThin faThin sol laThin tiThin",
+        "aikenThinHeadsMinor" => "laThin tiThin doThin reThin miThin faThin sol",
+        "sacredHarpHeads" => "fa sol la fa sol la mi",
+        "sacredHarpHeadsMinor" => "la mi fa sol la fa sol",
+        "southernHarmonyHeads" => "faThin sol laThin faThin sol laThin miThin",
+        "southernHarmonyHeadsMinor" => "laThin miThin faThin sol laThin faThin sol",
+        "funkHeads" => "doFunk reFunk miFunk faFunk solFunk laFunk tiFunk",
+        "funkHeadsMinor" => "laFunk tiFunk doFunk reFunk miFunk faFunk solFunk",
+        "walkerHeads" => "doWalker reWalker miWalker faWalker solFunk laWalker tiWalker",
+        "walkerHeadsMinor" => "laWalker tiWalker doWalker reWalker miWalker faWalker solFunk",
+        _ => return None,
+    })
+}
+
+/// The glyph of a note's head of step `d` under `shapeNoteStyles`, by its
+/// degree from the key's tonic: Emmentaler's symmetric head of the style
+/// and the note's value, else the one for its stem's direction — as
+/// LilyPond's `NoteHead` finds it. None for the usual head.
+pub fn shape_head(ev: &Ev, d: i64, up: bool) -> Option<&'static str> {
+    let styles = ev.look.sym(SHAPE_NOTE_STYLES)?;
+    let style = styles.split_whitespace().nth((d - ev.tonic).rem_euclid(7) as usize)?;
+    let log = match ev.base {
+        1 => 0,
+        2 => 1,
+        b if b >= 4 => 2,
+        _ => return None,
+    };
+    let table = crate::glyphs::glyphs();
+    ["s", if up { "u" } else { "d" }].iter().find_map(|side| table.get_key_value(&format!("noteheads.{side}{log}{style}")).map(|(k, _)| k.as_str()))
 }
 
 /// The partCombine commands.
