@@ -1578,26 +1578,28 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
     let hw = ev.head_w.unwrap_or(0.0);
     let hi = ev.heads.last().map_or(0, |h| h.pos);
     let lo = ev.heads.first().map_or(0, |h| h.pos);
-    let wide = ev.heads.iter().any(|h| h.side != 0);
     let reach_out = hw * RULE.ledger_out;
-    let mut lx = ev.x - reach_out;
-    let mut lw = hw + 2.0 * reach_out;
-    if wide && ev.up {
-        lw += hw - RULE.stem;
-    }
-    if wide && !ev.up {
-        lx -= hw - RULE.stem;
-        lw += hw - RULE.stem;
-    }
     let lt = RULE.ledger;
+    // A ledger line under the heads that need it — those on it or beyond
+    // it — as LilyPond draws them: a head a second moves to the other side
+    // of the stem lengthens the lines it needs, and no other.
+    let mut ledger = |pos: i64| {
+        let (mut left, mut right) = (0.0_f64, 0.0_f64);
+        for h in ev.heads.iter().filter(|h| if pos > 0 { h.pos >= pos } else { h.pos <= pos }) {
+            let at = h.side as f64 * (hw - RULE.stem);
+            left = left.min(at);
+            right = right.max(at);
+        }
+        pen.rect(ev.x + left - reach_out, top + y_of(pos) - lt / 2.0, right - left + hw + 2.0 * reach_out, lt);
+    };
     let mut pos = 6;
     while pos <= hi {
-        pen.rect(lx, top + y_of(pos) - lt / 2.0, lw, lt);
+        ledger(pos);
         pos += 2;
     }
     pos = -6;
     while pos >= lo {
-        pen.rect(lx, top + y_of(pos) - lt / 2.0, lw, lt);
+        ledger(pos);
         pos -= 2;
     }
     for hd in &ev.heads {

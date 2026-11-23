@@ -406,3 +406,54 @@ fn a_voices_beamed_notes_stem_as_they_are_told() {
         assert!(!bar.items[j].up, "a stem up under a beam that is down");
     }
 }
+
+/// The ledger lines of the first chord of `src`, each `(x0, x1)` from the
+/// note's x in staff spaces, the top one first; with its head's width.
+fn ledgers(src: &str) -> (Vec<(f64, f64)>, f64) {
+    let sp = 10.0;
+    let eng = engrave(src, 120.0, &Layout::default()).unwrap();
+    let ev = eng.staves[0][0].items.iter().find(|e| e.heads.len() > 1).expect("a chord");
+    let (paths, _) = eui_score::paths(&eng, sp, 0).unwrap();
+    // A ledger line is the one rectangle 0.2 space thick.
+    let mut lines: Vec<[f64; 4]> = paths.iter().filter_map(|p| if let eui_score::Path::Rect(r) = p { Some(*r) } else { None }).filter(|r| (r[3] - eui_score::RULE.ledger * sp).abs() < 1e-6).collect();
+    lines.sort_by(|a, b| a[1].total_cmp(&b[1]));
+    (lines.iter().map(|r| (r[0] / sp - ev.x, (r[0] + r[2]) / sp - ev.x)).collect(), ev.head_w.unwrap())
+}
+
+/// A ledger line is as long as the heads that need it (LilyPond's
+/// ledger lines, score #1019): a head moved to the other side of the stem
+/// by a second lengthens only the lines it sits on or beyond. The low C of
+/// `<cis' cis'' dis''>` had its line drawn on under the D an octave up.
+#[test]
+fn a_ledger_line_spans_the_heads_that_need_it() {
+    let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6;
+    let stem = eui_score::RULE.stem;
+    // The second up in the staff: the low C's line is its head's.
+    let (lines, hw) = ledgers("{ <cis' cis'' dis''>1 }");
+    let out = hw * eui_score::RULE.ledger_out;
+    assert_eq!(lines.len(), 1);
+    assert!(near(lines[0], (-out, hw + out)), "{:?}", lines[0]);
+    // d' hangs under the bottom line and needs none: c''s line is c''s.
+    let (lines, hw) = ledgers("{ <c' d'>4 }");
+    let out = hw * eui_score::RULE.ledger_out;
+    assert_eq!(lines.len(), 1);
+    assert!(near(lines[0], (-out, hw + out)), "{:?}", lines[0]);
+    // b and c' both under it: the line under both, c' right of the stem.
+    let (lines, hw) = ledgers("{ <b c'>4 }");
+    assert_eq!(lines.len(), 1);
+    assert!(near(lines[0], (-out, 2.0 * hw - stem + out)), "{:?}", lines[0]);
+    // Over the staff, stems down: a'' left of the stem, on the line b'' is over.
+    let (lines, hw) = ledgers("{ <a'' b''>4 }");
+    assert_eq!(lines.len(), 1);
+    assert!(near(lines[0], (-(hw - stem) - out, hw + out)), "{:?}", lines[0]);
+    // g'' left of the stem sits on the staff: a'''s line is a'''s.
+    let (lines, hw) = ledgers("{ <g'' a''>4 }");
+    assert_eq!(lines.len(), 1);
+    assert!(near(lines[0], (-out, hw + out)), "{:?}", lines[0]);
+    // Two lines over b'' and c''': both heads over the lower one, the upper
+    // one c''''s alone, b'' left of the stem being under it.
+    let (lines, hw) = ledgers("{ <b'' c'''>4 }");
+    assert_eq!(lines.len(), 2);
+    assert!(near(lines[0], (-out, hw + out)), "the line c''' is on: {:?}", lines[0]);
+    assert!(near(lines[1], (-(hw - stem) - out, hw + out)), "the line at a'': {:?}", lines[1]);
+}
