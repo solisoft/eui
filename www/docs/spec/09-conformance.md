@@ -815,7 +815,15 @@ staff each in a system of several, their tops and heights to the pixel —
 and its MIDI file and its
 PDF's drawing (`pdf_outlines`: the PDF without the words written under the
 outlines, which `crates/eui-score/tests/pages.rs` reads back through their
-ToUnicode map with the headers, footers, copyright and `systems-per-page`)
+ToUnicode map with the headers, footers, copyright and `systems-per-page`,
+the page numbers `first-page-number`, `print-page-number` and
+`print-first-page-number` set
+(`page_numbers_follow_print_first_page_number_and_first_page_number`),
+LilyPond 2.24's `\if` and `\unless` conditions
+(`lilypond_2_24_s_conditions_name_the_pages_they_go_on`), a book part's
+first and last page (`a_book_part_s_first_page_is_part_first_page`) and a
+`\pageBreak` between two scores
+(`a_page_break_between_scores_starts_a_page`))
 to be the same bytes — but for four pieces where it follows LilyPond
 (`PARTED`): `voices.ly`, `piano_voices.ly` and `voices_spacers.ly` sing two
 voices under `\relative`, which LilyPond reads each from the last pitch of

@@ -134,6 +134,9 @@ pub struct Bar {
     /// A movement starts with it (`Kind::Movement`): a line starts here, the
     /// bars are counted from it again, and the line before announces nothing.
     pub fresh: bool,
+    /// … and that movement starts a book part (`\bookpart`): its page is
+    /// the part's first (score #1025).
+    pub part: bool,
     /// The title over the line it starts: the movement's `piece` and `opus`,
     /// as LilyPond's `scoreTitleMarkup` sets them, left and right.
     pub title: Option<(String, String)>,
@@ -528,6 +531,7 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
     let mut time_mid: Option<Ev> = None;
     // A movement starting, waiting for its first bar: its title.
     let mut fresh: Option<(String, String)> = None;
+    let mut part = false;
     let mut tied: HashMap<i64, i64> = HashMap::new();
     let mut tempo = None;
     let mut volta_open: Option<String> = None;
@@ -611,6 +615,7 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
                 b.changes.time = std::mem::take(&mut time_next) || time_mid.take().is_some();
                 if let Some(title) = fresh.take() {
                     b.fresh = true;
+                    b.part = std::mem::take(&mut part);
                     b.first = true;
                     b.title = Some(title);
                 }
@@ -807,6 +812,7 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
                 change = (None, None);
                 let text = |k: usize| ev.texts.get(k).map(|w| w.text.clone()).unwrap_or_default();
                 fresh = Some((text(0), text(1)));
+                part = ev.page;
                 continue;
             }
             Kind::Partial => {

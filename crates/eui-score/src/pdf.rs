@@ -84,7 +84,8 @@ fn page_ink(eng: &Engraved, sp: f64, k: usize, count: usize, title: &str, paper:
     let odd = k.is_multiple_of(2);
     let e = em(-2.0);
     let foot_y = paper.h - paper.foot();
-    let say = |parts: &[PagePart]| words_of(parts, pages.header, title, k, count);
+    let at = page_at(eng, pages.spec, k, count);
+    let say = |parts: &[PagePart]| words_of(parts, pages.header, title, &at);
     let footer = if odd { spec.odd_footer.as_ref() } else { spec.even_footer.as_ref().or(spec.odd_footer.as_ref()) };
     match footer {
         Some(line) => grey.extend(line_paths(eng, sp, line, foot_y, e, &say)),
@@ -118,10 +119,57 @@ fn names_field(parts: &[PagePart], name: &str) -> bool {
     })
 }
 
-/// What `parts` say on page `k` (from 0) of `count`: a field of the header
-/// (the title the PDF is given where the header has none), the page's
-/// number, the words.
-pub(crate) fn words_of(parts: &[PagePart], header: &HashMap<String, String>, title: &str, k: usize, count: usize) -> String {
+/// A page as its header sees it (score #1025).
+pub(crate) struct PageAt {
+    /// From 0.
+    k: usize,
+    /// How many the score has.
+    count: usize,
+    /// Its number: `first-page-number` and the pages before.
+    number: i64,
+    /// A book part starts on it.
+    part_first: bool,
+    /// A book part ends on it.
+    part_last: bool,
+    /// Its number is printed: `print-page-number`, and on a part's first
+    /// page `print-first-page-number`.
+    shown: bool,
+    /// `print-page-number`.
+    printed: bool,
+}
+
+/// Page `k` of `count` of `eng`: its number, and whether a book part starts
+/// or ends on it — its first system starts a `\bookpart`, or the next
+/// page's does.
+pub(crate) fn page_at(eng: &Engraved, spec: &PaperSpec, k: usize, count: usize) -> PageAt {
+    let opens = |k: usize| {
+        k == 0
+            || eng
+                .pages
+                .get(k)
+                .and_then(|p| p.systems.first())
+                .and_then(|&s| eng.systems.get(s))
+                .and_then(|sys| sys.lines.first())
+                .and_then(|l| eng.staves.first().and_then(|bars| bars.get(l.bars.start)))
+                .is_some_and(|b| b.part)
+    };
+    let part_first = opens(k);
+    let printed = spec.print_page_number.unwrap_or(true);
+    PageAt {
+        k,
+        count,
+        number: spec.first_page_number.unwrap_or(1) + k as i64,
+        part_first,
+        part_last: k + 1 >= count || opens(k + 1),
+        shown: printed && (!part_first || spec.print_first_page_number.unwrap_or(false)),
+        printed,
+    }
+}
+
+/// What `parts` say on a page: a field of the header (the title the PDF is
+/// given where the header has none), the page's number, the words.
+pub(crate) fn words_of(parts: &[PagePart], header: &HashMap<String, String>, title: &str, at: &PageAt) -> String {
+    let (k, count) = (at.k, at.count);
     let mut out = String::new();
     for p in parts {
         match p {
@@ -131,16 +179,25 @@ pub(crate) fn words_of(parts: &[PagePart], header: &HashMap<String, String>, tit
                 None if f == "title" => out.push_str(title),
                 None => {}
             },
-            PagePart::Page => out.push_str(&(k + 1).to_string()),
+            PagePart::Page => out.push_str(&at.number.to_string()),
             PagePart::Only(cond, inner) => {
                 let on = match cond {
                     PageCond::First => k == 0,
                     PageCond::NotFirst => k > 0,
                     PageCond::Last => k + 1 == count,
                     PageCond::NotLast => k + 1 < count,
+                    PageCond::PartFirst => at.part_first,
+                    PageCond::NotPartFirst => !at.part_first,
+                    PageCond::PartLast => at.part_last,
+                    PageCond::NotPartLast => !at.part_last,
+                    PageCond::NumberShown => at.shown,
+                    PageCond::NumberHidden => !at.shown,
+                    PageCond::NumberPrinted => at.printed,
+                    PageCond::Single => count == 1,
+                    PageCond::NotSingle => count > 1,
                 };
                 if on {
-                    out.push_str(&words_of(inner, header, title, k, count));
+                    out.push_str(&words_of(inner, header, title, at));
                 }
             }
         }

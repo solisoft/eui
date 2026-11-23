@@ -24,6 +24,18 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- Page headers and footers know more pages (score #1025): `\on-the-fly
+  #part-first-page` and `#not-part-first-page` (a `\bookpart`'s first
+  page), `#create-page-number-stencil`, `#single-page`, and LilyPond
+  2.24's `\if` / `\unless` with `\on-first-page`, `\on-last-page`,
+  `\on-first-page-of-part`, `\on-last-page-of-part`, `\single-page` and
+  `\should-print-page-number`. `\paper`'s `first-page-number`,
+  `print-page-number` and `print-first-page-number` are read:
+  `#print-page-number-check-first` hides the number of a book part's
+  first page unless `print-first-page-number = ##t`, as LilyPond does.
+  A `\pageBreak` between two scores starts the second on a new page; it
+  was refused.
+
 - Roman numeral analysis (score #1026), as LilyPond's snippet (LSR 710)
   writes it: `\markup \rN { V 6 5 }` as a syllable of a `Lyrics` context
   under the bass — the numeral, its accidental, its quality and figures

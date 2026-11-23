@@ -731,7 +731,7 @@ fn layout_settings_are_read_and_passed_over_with_a_warning() {
         "\\new Staff \\with { \\consists \"Ambitus_engraver\" \\remove \"Time_signature_engraver\" fontSize = #-2 } { c'4 }",
         "\\layout { \\context { \\Score \\override BarNumber.font-size = #-2 } } { c'4 }",
         "\\midi { \\context { \\Score midiChannelMapping = #'instrument } } { c'4 }",
-        "\\paper { print-page-number = ##f top-system-spacing.basic-distance = #10 } { c'4 }",
+        "\\paper { print-all-headers = ##t top-system-spacing.basic-distance = #10 } { c'4 }",
         "\\header { encodingsoftware = \"musicxml2ly\" title = \\markup { \\bold Song } } { c'4 }",
         "<< \\set Score.proportionalNotationDuration = #(ly:make-moment 1/8) \\new Staff { c'4 } >>",
     ];

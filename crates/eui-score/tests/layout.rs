@@ -56,7 +56,8 @@ fn paper_settings_are_read_with_their_units() {
     assert_eq!((p.systems_per_page, p.max_systems_per_page, p.page_count, p.system_count), (Some(4), Some(5), Some(2), Some(6)));
     // Read, so not passed over; a setting this does not lay out still is, with a warning.
     assert!(parse(&tune("ragged-right = ##t system-count = 2", 2, "")).unwrap().warnings.is_empty());
-    assert_eq!(parse(&tune("print-page-number = ##f", 2, "")).unwrap().warnings.len(), 1);
+    assert_eq!(parse(&tune("print-page-number = ##f", 2, "")).unwrap().warnings.len(), 0, "read since score #1025");
+    assert_eq!(parse(&tune("print-all-headers = ##t", 2, "")).unwrap().warnings.len(), 1);
     // A count of nothing is no count.
     let p = parse(&tune("system-count = 0 page-count = 0", 2, "")).unwrap().paper;
     assert_eq!((p.system_count, p.page_count), (None, None));

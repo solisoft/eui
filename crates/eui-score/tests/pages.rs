@@ -82,7 +82,7 @@ fn headers_and_footers_are_read_as_lilypond_writes_them() {
     let p = parsed.paper;
     assert_eq!(
         p.odd_header,
-        Some(PageLine { left: vec![PagePart::Field("title".into())], centre: vec![PagePart::Text(String::new())], right: vec![PagePart::Only(PageCond::NotFirst, vec![PagePart::Page])] })
+        Some(PageLine { left: vec![PagePart::Field("title".into())], centre: vec![PagePart::Text(String::new())], right: vec![PagePart::Only(PageCond::NumberShown, vec![PagePart::Page])] })
     );
     assert_eq!(p.even_header, Some(PageLine { left: vec![PagePart::Page], centre: vec![], right: vec![PagePart::Field("composer".into())] }));
     assert_eq!(p.odd_footer, Some(PageLine { centre: vec![PagePart::Text("Page ".into()), PagePart::Page], ..PageLine::default() }));
@@ -195,4 +195,83 @@ fn a_score_that_cannot_lose_a_page_stays_at_its_size() {
     assert_eq!(eui_score::fit_pages(&parse(&plain).unwrap()).unwrap().2.staff_size, None, "left at 20 pt");
     // One page: nothing to save.
     assert_eq!(eui_score::fit_pages(&parse(&tune("", "", 4)).unwrap()).unwrap().2.staff_size, None);
+}
+
+/// What a header writes on each page of `src`, its PDF's words in the
+/// header's band: the page's words that are not the music's.
+fn headed(paper: &str, bars: usize) -> Vec<Vec<String>> {
+    page_words(&pdf(&tune(&format!("systems-per-page = 2 {paper}"), "", bars), "").unwrap())
+}
+
+#[test]
+fn page_numbers_follow_print_first_page_number_and_first_page_number() {
+    let header = r#"oddHeaderMarkup = \markup \fill-line { "" \on-the-fly #print-page-number-check-first \fromproperty #'page:page-number-string }
+                    evenHeaderMarkup = \markup \fill-line { \on-the-fly #print-page-number-check-first \fromproperty #'page:page-number-string "" }"#;
+    let has = |pages: &[Vec<String>], k: usize, w: &str| pages[k].iter().any(|x| x == w);
+    // LilyPond's default: no number on the first page.
+    let plain = headed(header, 60);
+    assert!(plain.len() >= 3);
+    assert!(!has(&plain, 0, "1") && has(&plain, 1, "2") && has(&plain, 2, "3"), "{plain:?}");
+    // `print-first-page-number = ##t`: on it too.
+    let first = headed(&format!("print-first-page-number = ##t {header}"), 60);
+    assert!(has(&first, 0, "1") && has(&first, 1, "2"));
+    // `first-page-number = 5`: counted from 5, the first still unnumbered.
+    let five = headed(&format!("first-page-number = 5 {header}"), 60);
+    assert!(!has(&five, 0, "5") && has(&five, 1, "6") && has(&five, 2, "7"), "{five:?}");
+    let parsed = parse(&tune("first-page-number = #5 print-first-page-number = ##t print-page-number = ##f", "", 2)).unwrap();
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+    assert_eq!((parsed.paper.first_page_number, parsed.paper.print_first_page_number, parsed.paper.print_page_number), (Some(5), Some(true), Some(false)));
+    // `print-page-number = ##f`: none anywhere.
+    let none = headed(&format!("print-page-number = ##f {header}"), 60);
+    assert!((0..none.len()).all(|k| !has(&none, k, &(k + 1).to_string())), "{none:?}");
+}
+
+#[test]
+fn lilypond_2_24_s_conditions_name_the_pages_they_go_on() {
+    let has = |pages: &[Vec<String>], k: usize, w: &str| pages[k].iter().any(|x| x == w);
+    let header = r#"oddHeaderMarkup = \markup \fill-line { \if \on-first-page "FIRST" \unless \on-first-page "LATER" \if \on-last-page "END" \if \should-print-page-number \fromproperty #'page:page-number-string }
+                    evenHeaderMarkup = \markup \fill-line { \unless \on-last-page "MORE" \if \single-page "ONE" \on-the-fly #not-part-first-page "INPART" }"#;
+    let pages = headed(header, 60);
+    let n = pages.len();
+    assert!(n >= 3);
+    assert!(has(&pages, 0, "FIRST") && !has(&pages, 0, "LATER") && !has(&pages, 0, "1"), "{:?}", pages[0]);
+    assert!(has(&pages, 1, "MORE") && has(&pages, 1, "INPART") && !has(&pages, 1, "ONE"), "{:?}", pages[1]);
+    assert!(has(&pages, 2, "LATER") && has(&pages, 2, "3"));
+    let last = n - 1;
+    assert!(if last.is_multiple_of(2) { has(&pages, last, "END") } else { !has(&pages, last, "MORE") }, "{:?}", pages[last]);
+    let single = headed(header, 2);
+    assert_eq!(single.len(), 1);
+    assert!(has(&single, 0, "FIRST") && has(&single, 0, "END"));
+    assert!(warnings(&tune(header, "", 2)).unwrap().is_empty());
+}
+
+#[test]
+fn a_book_part_s_first_page_is_part_first_page() {
+    let has = |pages: &[Vec<String>], k: usize, w: &str| pages[k].iter().any(|x| x == w);
+    let music = ["c'4 d' e' f'"; 3].join(" | ");
+    let src = format!(
+        r#"\paper {{ oddHeaderMarkup = \markup \fill-line {{ \on-the-fly #part-first-page "OPENS" \if \on-last-page-of-part "CLOSES" }}
+                     evenHeaderMarkup = \markup \fill-line {{ \on-the-fly #part-first-page "OPENS" \if \on-last-page-of-part "CLOSES" }} }}
+           \book {{ \bookpart {{ {{ {music} }} }} \bookpart {{ {{ {music} }} }} }}"#
+    );
+    let pages = page_words(&pdf(&src, "").unwrap());
+    assert_eq!(pages.len(), 2, "a book part starts a page");
+    assert!(has(&pages, 0, "OPENS") && has(&pages, 0, "CLOSES"));
+    assert!(has(&pages, 1, "OPENS") && has(&pages, 1, "CLOSES"), "{pages:?}");
+    assert!(warnings(&src).unwrap().iter().all(|w| !w.message.contains("on-the-fly") && !w.message.contains("\\if")), "{:?}", warnings(&src).unwrap());
+}
+
+#[test]
+fn a_page_break_between_scores_starts_a_page() {
+    let src = r#"\book {
+      \markup \fill-line { \column { \bold "Sonata" \italic "for flute" } }
+      \pageBreak
+      \score { { c'4 d' e' f' } }
+      \pageBreak
+      \score { { g'4 a' b' c'' } }
+    }"#;
+    let (eng, _) = engrave_paper(src).unwrap();
+    assert_eq!(eng.pages.len(), 2, "the second score on a page of its own");
+    let together = src.replacen("\\pageBreak\n      \\score { { g'4", "\\score { { g'4", 1);
+    assert_eq!(engrave_paper(&together).unwrap().0.pages.len(), 1);
 }

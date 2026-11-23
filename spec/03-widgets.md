@@ -1582,7 +1582,17 @@ bottom margin is 12 mm and the PDF sets no number at the top; or, when
 `\paper` sets `oddHeaderMarkup`, `evenHeaderMarkup`, `oddFooterMarkup` or
 `evenFooterMarkup`, those lines — words, header fields, the page's number,
 left, centred and right as `\fill-line` spreads them, an even page taking
-the odd page's when it sets none — with the header's `copyright` centred
+the odd page's when it sets none; a piece under `\on-the-fly #first-page`,
+`#not-first-page`, `#last-page`, `#not-last-page`, `#part-first-page`,
+`#not-part-first-page`, `#print-page-number-check-first`,
+`#create-page-number-stencil` or `#single-page`, or LilyPond 2.24's `\if`
+and `\unless` with `\on-first-page`, `\on-last-page`,
+`\on-first-page-of-part`, `\on-last-page-of-part`, `\single-page` and
+`\should-print-page-number`, on the pages it names only — a book part's
+pages counted from the page its `\bookpart` starts, the numbers from
+`first-page-number`, printed unless `print-page-number = ##f`, on a part's
+first page only with `print-first-page-number = ##t` (score #1025); a
+`\pageBreak` between two scores starts the second on a page — with the header's `copyright` centred
 over the first page's footer and at most `systems-per-page` systems a page;
 every word also written as invisible text under its outline, so a reader
 selects and searches it), and several

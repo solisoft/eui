@@ -1907,6 +1907,13 @@ pub struct PaperSpec {
     pub ragged_bottom: Option<bool>,
     /// `ragged-last-bottom`: the last page's so (LilyPond's default: yes).
     pub ragged_last_bottom: Option<bool>,
+    /// `first-page-number`: the first page's number (1 unless it says).
+    pub first_page_number: Option<i64>,
+    /// `print-page-number`: the headers' page numbers drawn (yes unless it says).
+    pub print_page_number: Option<bool>,
+    /// `print-first-page-number`: a book part's first page numbered too
+    /// (LilyPond's default: no).
+    pub print_first_page_number: Option<bool>,
     /// `system-system-spacing`: from one system to the next.
     pub system_spacing: Spacing,
     /// `score-system-spacing`: from a score's (a movement's) last system to
@@ -2049,17 +2056,59 @@ pub enum PagePart {
     Only(PageCond, Vec<PagePart>),
 }
 
-/// Which pages an `\on-the-fly` piece is drawn on.
+/// Which pages an `\on-the-fly` piece — or LilyPond 2.24's `\if` and
+/// `\unless` — is drawn on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageCond {
-    /// `#first-page`.
+    /// `#first-page`, `\if \on-first-page`.
     First,
-    /// `#not-first-page`, `#print-page-number-check-first`.
+    /// `#not-first-page`, `\unless \on-first-page`.
     NotFirst,
-    /// `#last-page`.
+    /// `#last-page`, `\if \on-last-page`.
     Last,
     /// `#not-last-page`.
     NotLast,
+    /// `#part-first-page`, `\if \on-first-page-of-part`: a book part's
+    /// first page (score #1025).
+    PartFirst,
+    /// `#not-part-first-page`.
+    NotPartFirst,
+    /// `\if \on-last-page-of-part`.
+    PartLast,
+    /// `\unless \on-last-page-of-part`.
+    NotPartLast,
+    /// `#print-page-number-check-first`, `\if \should-print-page-number`:
+    /// where `print-page-number` is on, and not on a book part's first
+    /// page unless `print-first-page-number` says.
+    NumberShown,
+    /// Its `\unless`.
+    NumberHidden,
+    /// `#create-page-number-stencil`: where `print-page-number` is on.
+    NumberPrinted,
+    /// `\if \single-page`: the score has one page.
+    Single,
+    /// `\unless \single-page`.
+    NotSingle,
+}
+
+impl PageCond {
+    /// The pages it does not name: what `\unless` draws on.
+    pub fn negated(self) -> Self {
+        match self {
+            PageCond::First => PageCond::NotFirst,
+            PageCond::NotFirst => PageCond::First,
+            PageCond::Last => PageCond::NotLast,
+            PageCond::NotLast => PageCond::Last,
+            PageCond::PartFirst => PageCond::NotPartFirst,
+            PageCond::NotPartFirst => PageCond::PartFirst,
+            PageCond::PartLast => PageCond::NotPartLast,
+            PageCond::NotPartLast => PageCond::PartLast,
+            PageCond::NumberShown => PageCond::NumberHidden,
+            PageCond::NumberHidden | PageCond::NumberPrinted => PageCond::NumberShown,
+            PageCond::Single => PageCond::NotSingle,
+            PageCond::NotSingle => PageCond::Single,
+        }
+    }
 }
 
 /// Lyrics sung to a voice by its name, attached once every voice is read.
@@ -2737,6 +2786,13 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
             i += 1;
             continue;
         }
+        if t.t == T::Cmd && t.v == "pageBreak" {
+            // Between two scores (score #1025): the next starts a page. Before
+            // the first — a title page's — there is no page before it to end.
+            new_page = !movements.is_empty();
+            i += 1;
+            continue;
+        }
         if !movements.is_empty() {
             if t.t == T::Sym('}') || !(t.t == T::Cmd || t.t == T::Sym('{') || twin(&toks, i, '<')) {
                 return refuse(format!("'{}' after the end of the music", t.v), t.at);
@@ -3145,6 +3201,8 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
                     "ragged-last" => Some(&mut paper.ragged_last),
                     "ragged-bottom" => Some(&mut paper.ragged_bottom),
                     "ragged-last-bottom" => Some(&mut paper.ragged_last_bottom),
+                    "print-page-number" => Some(&mut paper.print_page_number),
+                    "print-first-page-number" => Some(&mut paper.print_first_page_number),
                     _ => None,
                 };
                 if let Some(slot) = slot {
@@ -3155,6 +3213,12 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
             }
             let at_number = if is(toks, j + 2, T::Sym('#')) { j + 3 } else { j + 2 };
             if let Some((n, after)) = number_at(toks, at_number) {
+                if t.v == "first-page-number" {
+                    // A number, not a length.
+                    paper.first_page_number = Some(n.round().clamp(-9999.0, 9999.0) as i64);
+                    j = after;
+                    continue;
+                }
                 // A length: millimetres unless a unit says otherwise.
                 let (mm, after) = length_unit(toks, n, after, paper.staff_size);
                 let slot = match t.v.as_str() {
@@ -7065,9 +7129,17 @@ fn page_markup(toks: &[Tok], i: usize) -> Result<(PageLine, usize), ScoreError> 
 fn page_cond(name: &str) -> Option<PageCond> {
     Some(match name {
         "first-page" => PageCond::First,
-        "not-first-page" | "print-page-number-check-first" => PageCond::NotFirst,
+        "not-first-page" => PageCond::NotFirst,
+        "print-page-number-check-first" => PageCond::NumberShown,
+        "create-page-number-stencil" => PageCond::NumberPrinted,
         "last-page" => PageCond::Last,
         "not-last-page" => PageCond::NotLast,
+        "part-first-page" => PageCond::PartFirst,
+        "not-part-first-page" => PageCond::NotPartFirst,
+        "part-last-page" => PageCond::PartLast,
+        "not-part-last-page" => PageCond::NotPartLast,
+        "single-page" => PageCond::Single,
+        "not-single-page" => PageCond::NotSingle,
         _ => return None,
     })
 }
@@ -7104,6 +7176,29 @@ fn page_item(toks: &[Tok], i: usize, parts: &mut Vec<PagePart>) -> Result<usize,
                     _ => warn(format!("\\fromproperty #'{group}:{name} is not drawn"), t.at),
                 }
                 Ok(if name.is_empty() { j + 1 } else { j + 3 })
+            }
+            "if" | "unless" => {
+                // LilyPond 2.24: `\if \on-first-page …`, `\unless \should-print-page-number …`.
+                let name = toks.get(i + 1).filter(|c| c.t == T::Cmd).map(|c| c.v.clone()).unwrap_or_default();
+                let cond = match name.as_str() {
+                    "on-first-page" => Some(PageCond::First),
+                    "on-last-page" => Some(PageCond::Last),
+                    "on-first-page-of-part" => Some(PageCond::PartFirst),
+                    "on-last-page-of-part" => Some(PageCond::PartLast),
+                    "should-print-page-number" => Some(PageCond::NumberShown),
+                    "single-page" => Some(PageCond::Single),
+                    _ => None,
+                };
+                let mut inner = Vec::new();
+                let j = page_item(toks, if name.is_empty() { i + 1 } else { i + 2 }, &mut inner)?;
+                match cond {
+                    Some(cond) => parts.push(PagePart::Only(if t.v == "unless" { cond.negated() } else { cond }, inner)),
+                    None => {
+                        warn(format!("\\{} \\{name} is not read: its words are on every page", t.v), t.at);
+                        parts.extend(inner);
+                    }
+                }
+                Ok(j)
             }
             "on-the-fly" => {
                 let name = toks.get(i + 2).filter(|w| w.t == T::Word && is(toks, i + 1, T::Sym('#'))).map(|w| w.v.clone()).unwrap_or_default();
