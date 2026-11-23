@@ -718,6 +718,27 @@ construct as LilyPond 2.25 draws it:
   context; a text set to `""` is not printed, and
   `printPartCombineTexts = ##f` prints none. A `\unset` gives back what
   the music set before it, not LilyPond's word under a `\with`.
+- *Slurs scored* (score #1019): a slur is chosen as LilyPond's slur
+  scoring chooses one, reduced. An end stands half a space off its head
+  (and off a staff line it would lie on), beside its stem while the stem
+  is on its side, half a space off the stem's end where a beam goes on
+  under the slur or a flag hangs there; it may stand up to four spaces
+  farther out. For each pair of ends the curve is arched as LilyPond's
+  height for its width says, or higher: just enough to pass half a space
+  from the heads, the stems' ends, the accidentals and the articulations
+  set next to the notes it goes round (`\staccato`, `\tenuto`,
+  `\accent`, `\marcato`, `\staccatissimo`, `\portato`) — its two
+  control points raised each by what is in its way on its side, neither
+  more than twice the other. The pair kept is the cheapest by LilyPond's
+  terms: a space out of its place (`edge-attraction-factor`, a fifth of
+  it along a stem), steeper than its notes (`steeper-slope-factor`),
+  tilted between notes of one height, against its notes' slope, past a
+  slope of 0.7, an end on a staff line, and an arch higher than its
+  width's. Articulations other than those six, and fingerings, stand
+  outside a slur that passes where they would be. A phrasing slur goes
+  round the slurs under it. Rests, grace notes and other voices under a
+  slur are not gone round, and a slur between two staves is drawn as
+  before.
 - *Signs an engraver is expected to know* (score #1026):
   the ornaments `\reverseturn`, `\prallprall`, `\prallmordent`,
   `\upprall`, `\lineprall`, the fermatas `\veryshortfermata`,

@@ -1190,8 +1190,10 @@ of a space, a stem 0.13, a beam 0.48): spacing from the most common shortest
 note, never longer than a dotted eighth, 1.2 spaces more for each doubling;
 stems of 3.5 spaces that reach the middle line; eighths beamed by the
 metre, a beam placed so its stems average their ideal length and quanted to
-sit, straddle or hang on a staff line; slurs that level their ends before
-they arch over a note in the way, at LilyPond's height. Set beside LilyPond
+sit, straddle or hang on a staff line; slurs chosen as LilyPond's slur
+scoring chooses them — each end by its head or along its stem, the arch
+just high enough to pass half a space from the stems, accidentals and
+articulations under it. Set beside LilyPond
 2.24 at the same staff size, the gallery's three excerpts come out within
 two per cent of its widths.
 

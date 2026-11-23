@@ -294,6 +294,22 @@ release. A wire change lands here first, is released, and then the pin moves.
   clear of it, so a flat or a natural goes under the sharp over it. They
   stood in columns of whole boxes filled from the top, where two flats a
   sixth apart touched.
+- A slur is chosen as LilyPond's slur scoring chooses one, reduced (score
+  #1019). Each end stands half a space off its head, beside its stem where
+  the stem is on the slur's side, or half a space off a beamed stem's end,
+  and may stand a few steps farther out; each pair of ends is arched just
+  high enough to keep half a space from what the slur goes round — the
+  heads, the stems and beams on its side, the accidentals, and the
+  articulations set next to the notes (staccato, tenuto, accent, marcato,
+  staccatissimo, portato), more on the side of what is in its way — and
+  the cheapest is drawn: near its notes, no steeper than they are, not
+  ballooning, its ends off the staff lines. What stands outside a slur —
+  a fermata, an ornament, a bowing, a fingering — is set past it. A
+  phrasing slur goes round the slurs under it, and a slur a line break
+  parts may rise toward the break. A slur ended at its head or its stem's
+  end, sloped an eighth at most, and rose only over the heads and stems
+  between: it ran through an accent, a staccato or a sharp under it. Ties
+  are as they were.
 - A beam keeps from what stands between its ends (score #1019, LilyPond's
   beam collisions): another voice's heads, accidentals, stems and flags, a
   clef, a key or a metre changed in the middle of the bar, another voice's

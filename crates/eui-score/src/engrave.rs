@@ -54,6 +54,9 @@ pub struct Line {
     pub page: usize,
     /// Ties and slurs, as fill commands in staff spaces.
     pub curves: Vec<Vec<f64>>,
+    /// Each of `curves`, by its index: what it is, the note it starts on
+    /// and the control points of its middle line.
+    pub curve_places: Vec<marks::CurvePlace>,
     /// Tempo marks.
     pub marks: Vec<TempoMark>,
     /// Endings' brackets.

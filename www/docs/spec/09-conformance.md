@@ -1170,6 +1170,20 @@ version 7) and a margin.
   (`a_block_of_words_follows_the_one_before_as_markup_markup_spacing_says`);
   on a page nearly full the words come nearer the music
   (`words_a_page_has_no_room_for_come_nearer_the_music_before_they_leave_it`).
+- **A slur goes round what is under it** (03 §1.4; score #1019), in
+  `crates/eui-score/tests/slurs.rs`, measured on the curve as drawn, a
+  third of a space of white at least: round an accent next to its note,
+  the heads and the stems (`a_slur_goes_round_an_accent_next_to_its_note`),
+  a staccato over a note two octaves up
+  (`a_slur_goes_round_a_staccato_and_the_stem_under_it`), a sharp
+  (`a_slur_goes_round_an_accidental`); its ends half a space off their
+  heads, rising as the notes do
+  (`a_slur_starts_and_ends_half_a_space_off_its_heads`); a fermata and a
+  fingering outside it
+  (`a_fermata_and_a_fingering_stand_outside_the_slur`); a phrasing slur
+  round the slur under it
+  (`a_phrasing_slur_goes_round_the_slur_under_it`); the ties where they
+  were (`ties_are_left_as_they_were`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11

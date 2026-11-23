@@ -3,6 +3,7 @@
 //! marks, and how far all of it reaches (`eui_builders_score.sl`, "Ties and
 //! slurs" and "Expression").
 
+pub use crate::cross::CurveKind;
 use crate::draw::{dot_start, past_flag, tremolo_reach};
 use crate::engrave::{barline_width, rest_name, stem_x, y_of, Line};
 use crate::glyphs::{glyph, Weight};
@@ -76,6 +77,31 @@ pub struct ScriptPlace {
     pub k: f64,
     /// The figures are a string's number, in a circle.
     pub circled: bool,
+    /// The note or rest it is written on: its number among its staff's
+    /// items ([`Ev::i`]).
+    pub item: usize,
+    /// Which of them it is, as the source writes them: its index among the
+    /// note's articulations ([`Ev::scripts`]), or among its fingerings
+    /// ([`Ev::fingers`]) for a `figure`.
+    pub index: usize,
+}
+
+impl ScriptPlace {
+    /// Its ink's box, `[left, top, right, bottom]` in its line's frame.
+    pub fn bbox(&self) -> [f64; 4] {
+        match &self.figure {
+            Some(_) if self.circled => [self.x - STRING_R, self.y - STRING_R, self.x + STRING_R, self.y + STRING_R],
+            Some(f) => {
+                let (top, bottom) = figure_box(f);
+                let hw = figure_width(f) / 2.0;
+                [self.x - hw, self.y + top, self.x + hw, self.y + bottom]
+            }
+            None => {
+                let bb = glyph(self.glyph).bbox;
+                [self.x + bb[0], self.y + bb[1], self.x + bb[2], self.y + bb[3]]
+            }
+        }
+    }
 }
 
 /// A string number's circle: its radius, and its figure's size against
@@ -223,6 +249,32 @@ pub struct HairpinPiece {
     pub look: crate::look::Look,
 }
 
+/// A tie, a slur or a phrasing slur as it is drawn on a line: the curve of
+/// the same index in [`Line::curves`], and where it comes from — what an
+/// editor needs to take one and reshape it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CurvePlace {
+    /// A tie, a slur or a phrasing slur.
+    pub kind: CurveKind,
+    /// The note it starts on: its number among its staff's items
+    /// ([`Ev::i`]).
+    pub item: usize,
+    /// Where that note is written: its character in the source
+    /// ([`Ev::at`]).
+    pub at: usize,
+    /// A tie's head: its diatonic number ([`crate::parse::Head::d`]), which
+    /// tells the ties of a chord apart.
+    pub head: Option<i64>,
+    /// The control points of its middle line, `(x, y)` in its line's frame,
+    /// left to right.
+    pub points: [(f64, f64); 4],
+    /// It arches up, over the notes.
+    pub up: bool,
+    /// 0, or 1 for the piece on the line it ends on when a line break
+    /// parts it.
+    pub piece: usize,
+}
+
 struct ScriptRule {
     up: &'static str,
     down: &'static str,
@@ -325,6 +377,7 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
             }
         }
         line.curves = Vec::new();
+        line.curve_places = Vec::new();
     }
     let ev_at = |at: At| -> &Ev { &bars[at.0].items[at.1] };
     for (i, &at) in notes.iter().enumerate() {
@@ -346,7 +399,7 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
             if let Some(d) = ev.look.dir("Tie") {
                 over = d > 0;
             }
-            tie(lines, ev, hd.pos, nxt, other.pos, over);
+            tie(lines, ev, hd, nxt, other.pos, over);
         }
     }
     // `\laissezVibrer` and `\repeatTie`: a short tie from each head to
@@ -368,20 +421,22 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
             let dir = if over { -1.0 } else { 1.0 };
             let y = y_of(hd.pos) + dir * 0.35;
             let line = &mut lines[ev.sys];
+            let from = Source { kind: CurveKind::Tie, item: ev.i, at: ev.at, head: Some(hd.d), piece: 0 };
             if ev.lv {
                 let xa = ev.x + ev.head_w.unwrap_or(0.0) + 0.15;
-                arc(line, xa, y, xa + SHORT_TIE, y, dir, 1.0, 0.333);
+                arc(line, from, xa, y, xa + SHORT_TIE, y, dir);
             }
             if ev.repeat_tie {
                 let acc = ev.heads.iter().filter_map(|h| h.acc_x).fold(0.0, f64::min);
                 let xb = ev.x + acc - 0.15;
-                arc(line, xb - SHORT_TIE, y, xb, y, dir, 1.0, 0.333);
+                arc(line, from, xb - SHORT_TIE, y, xb, y, dir);
             }
         }
     }
     // Each voice's slurs close on its own notes.
     let mut open: [Vec<At>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     let mut slurs: Vec<(At, At)> = Vec::new();
+    let mut drawn: Vec<Drawn> = Vec::new();
     for &at in &notes {
         let ev = ev_at(at);
         let mine = &mut open[usize::from(voice_of(ev) - 1)];
@@ -390,7 +445,8 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
         }
         if ev.slur_off {
             if let Some(first) = mine.pop() {
-                slur(lines, bars, &notes, first, at, 0.0, forced(ev_at(first).slur_dir, ev_at(first).look.dir("Slur")));
+                let side = forced(ev_at(first).slur_dir, ev_at(first).look.dir("Slur"));
+                slur(lines, bars, &notes, (first, at), CurveKind::Slur, (0.0, 0.0), side, &mut drawn);
                 slurs.push((first, at));
             }
         }
@@ -407,9 +463,12 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
         if ev.phrase_off {
             if let Some(first) = mine.pop() {
                 let (a, b) = (ev_at(first).n.unwrap_or(0), ev.n.unwrap_or(0));
-                let inside = slurs.iter().any(|&(f, l)| voice_of(ev_at(f)) == voice_of(ev) && ev_at(f).n.unwrap_or(0) <= b && ev_at(l).n.unwrap_or(0) >= a);
+                // Where a slur starts or ends on the note it does, it starts
+                // and ends farther out.
+                let shared = |n: usize| slurs.iter().any(|&(f, l)| voice_of(ev_at(f)) == voice_of(ev) && (ev_at(f).n == Some(n) || ev_at(l).n == Some(n)));
+                let out = |n: usize| if shared(n) { PHRASE_OUT } else { 0.0 };
                 let side = forced(ev_at(first).phrase_dir, ev_at(first).look.dir("PhrasingSlur"));
-                slur(lines, bars, &notes, first, at, if inside { 1.2 } else { 0.0 }, side);
+                slur(lines, bars, &notes, (first, at), CurveKind::Phrase, (out(a), out(b)), side, &mut drawn);
             }
         }
     }
@@ -444,7 +503,9 @@ fn glissando(lines: &mut [Line], ev: &Ev, nxt: &Ev) {
     lines[nxt.sys].glissandi.push([start, mid, x1, y1]);
 }
 
-fn tie(lines: &mut [Line], ev: &Ev, pos: i64, nxt: &Ev, other: i64, over: bool) {
+fn tie(lines: &mut [Line], ev: &Ev, hd: &crate::parse::Head, nxt: &Ev, other: i64, over: bool) {
+    let pos = hd.pos;
+    let from = Source { kind: CurveKind::Tie, item: ev.i, at: ev.at, head: Some(hd.d), piece: 0 };
     let dir = if over { -1.0 } else { 1.0 };
     let y = y_of(pos) + dir * 0.35;
     let y2 = y_of(other) + dir * 0.35;
@@ -459,13 +520,13 @@ fn tie(lines: &mut [Line], ev: &Ev, pos: i64, nxt: &Ev, other: i64, over: bool) 
     }
     let xb = nxt.x - 0.15;
     if ev.sys == nxt.sys {
-        arc(&mut lines[ev.sys], xa, y, xb, y2, dir, 1.0, 0.333);
+        arc(&mut lines[ev.sys], from, xa, y, xb, y2, dir);
     } else {
         let end = lines[ev.sys].bar_end - 0.5;
-        arc(&mut lines[ev.sys], xa, y, end, y, dir, 1.0, 0.333);
+        arc(&mut lines[ev.sys], from, xa, y, end, y, dir);
         let later = &mut lines[nxt.sys];
         let start = later.prefix - 0.6;
-        arc(later, start, y2, xb, y2, dir, 1.0, 0.333);
+        arc(later, Source { piece: 1, ..from }, start, y2, xb, y2, dir);
     }
 }
 
@@ -479,12 +540,257 @@ fn forced(own: i64, setting: Option<i64>) -> Option<i64> {
     }
 }
 
-/// A slur from `first` to `last`; `forced` the direction a setting gives
-/// it (`\slurUp`: 1), over the one its notes and voice give it.
+// ---- Slurs ------------------------------------------------------------------
+//
+// A slur is chosen as LilyPond's slur scoring chooses one, reduced: each end
+// may stand where its note puts it or a few steps farther out; each pair of
+// ends is arched just high enough to clear what the slur goes round — the
+// heads, the stems and beams on its side, the accidentals, the articulations
+// next to the notes — and scored; the cheapest is drawn.
+
+/// How far a slur keeps from what it goes round.
+pub(crate) const SLUR_CLEAR: f64 = 0.5;
+/// … from the accidental of the note it ends on, which it comes down past.
+const SLUR_CLEAR_LAST: f64 = 0.2;
+/// How far out a phrasing slur starts, where a slur starts on the same note.
+const PHRASE_OUT: f64 = 1.2;
+/// How far out of its place an end is tried, in spaces: LilyPond's
+/// `region-size` is 4, in half spaces.
+const SLUR_LIFTS: [f64; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0];
+/// LilyPond's `edge-attraction-factor`: what a space out of its place costs
+/// an end.
+const SLUR_EDGE: f64 = 4.0;
+/// … an end that runs along its note's stem: a fifth, as LilyPond's.
+const SLUR_EDGE_STEM: f64 = 0.8;
+/// `steeper-slope-factor`: a slur steeper than its notes, by the space.
+const SLUR_STEEPER: f64 = 50.0;
+/// `max-slope-factor` (counted twice, as LilyPond does), past a slope
+/// gentler than LilyPond's `max-slope` of 1.1: this curve is leaned, not
+/// turned, and a steep one reads as a stroke through its notes.
+const SLUR_MAX_SLOPE: f64 = 0.7;
+/// …
+const SLUR_MAX_SLOPE_FACTOR: f64 = 20.0;
+/// `non-horizontal-penalty`: a slope between two notes of one height.
+const SLUR_TILTED: f64 = 15.0;
+/// `same-slope-penalty`: a slope against its notes'.
+const SLUR_AGAINST: f64 = 20.0;
+/// What an end on a staff line costs.
+const SLUR_ON_LINE: f64 = 3.0;
+
+/// A slur drawn on a line: what a phrasing slur over it goes round.
+struct Drawn {
+    sys: usize,
+    voice: u8,
+    first: usize,
+    last: usize,
+    points: [(f64, f64); 4],
+}
+
+/// Where a curve comes from: what [`CurvePlace`] says of it.
+#[derive(Clone, Copy)]
+struct Source {
+    kind: CurveKind,
+    item: usize,
+    at: usize,
+    head: Option<i64>,
+    piece: usize,
+}
+
+/// Where a slur meets the note it starts or ends on.
+#[derive(Clone, Copy)]
+struct Tip {
+    /// Its place when nothing moves it.
+    x: f64,
+    y: f64,
+    /// The stem it runs along, beside it up to its end and over it past
+    /// there: its middle and its end.
+    stem: Option<(f64, f64)>,
+    /// What a space out of its place costs.
+    pull: f64,
+    /// It stands on a beam.
+    beamed: bool,
+}
+
+impl Tip {
+    /// The end `lift` out of its place, on the side `s` of the notes.
+    fn at(&self, lift: f64, s: f64, left: bool) -> (f64, f64) {
+        let y = self.y + s * lift;
+        match self.stem {
+            Some((sx, end)) if s * (y - end) < 0.25 => (sx + if left { 0.365 } else { -0.365 }, y),
+            Some((sx, _)) => (sx, y),
+            None => (self.x, y),
+        }
+    }
+}
+
+/// `y`, moved off a staff line it would lie on (LilyPond's
+/// `move_away_from_staffline`).
+fn off_line(y: f64, s: f64) -> f64 {
+    if on_line(y, 0.1) {
+        y + s * 0.15
+    } else {
+        y
+    }
+}
+
+fn on_line(y: f64, near: f64) -> bool {
+    (y - y.round()).abs() < near && (-0.5..=4.5).contains(&y)
+}
+
+/// The head a slur on a side of a note meets: its middle's y.
+fn slur_head(ev: &Ev, over: bool) -> f64 {
+    y_of(if over { ev.heads.last() } else { ev.heads.first() }.map_or(0, |h| h.pos))
+}
+
+/// The stem's middle, for a note whose stem is on the slur's side.
+fn slur_stem(ev: &Ev, over: bool) -> Option<f64> {
+    (ev.base > 1 && over == ev.up && !ev.look.omitted("Stem")).then(|| stem_x(ev) + if ev.up { -RULE.stem / 2.0 } else { RULE.stem / 2.0 })
+}
+
+/// Where a slur meets an end note, as LilyPond's base attachments: half a
+/// space off the head — beside the stem when the stem is on its side — or
+/// half a space off the stem's end, when a beam goes on from there under the
+/// slur (`beam_in`) or a flag hangs where the slur would start.
+fn slur_tip(ev: &Ev, over: bool, left: bool, beam_in: bool) -> Tip {
+    let s = if over { -1.0 } else { 1.0 };
+    let by_head = off_line(slur_head(ev, over) + s, s);
+    let Some(sx) = slur_stem(ev, over) else {
+        return Tip { x: ev.x + ev.head_w.unwrap_or(0.0) / 2.0, y: by_head, stem: None, pull: SLUR_EDGE, beamed: false };
+    };
+    let flagged = ev.beam.is_none() && ev.base >= 8 && !ev.xbeam;
+    if beam_in || (left && flagged) {
+        return Tip { x: sx, y: ev.stem_end + s * 0.5, stem: None, pull: SLUR_EDGE, beamed: beam_in };
+    }
+    Tip { x: sx, y: by_head, stem: Some((sx, ev.stem_end)), pull: SLUR_EDGE_STEM, beamed: false }
+}
+
+/// The articulations a slur on a side of a note goes round, as boxes
+/// `[left, top, right, bottom]`.
+fn slur_scripts(ev: &Ev, over: bool) -> Vec<[f64; 4]> {
+    if ev.scripts.is_empty() {
+        return Vec::new();
+    }
+    let stack = script_stack(ev, &[]);
+    let mid = (slur_head(ev, true) + slur_head(ev, false)) / 2.0;
+    stack.placed.iter().zip(&stack.inside).filter(|(_, inside)| **inside).map(|(sc, _)| sc.bbox()).filter(|b| ((b[1] + b[3]) / 2.0 < mid) == over).collect()
+}
+
+/// What a slur clears of a note under it: `(x, y, how far)`. `last` for
+/// the note it ends on, of which it clears the accidental alone.
+fn slur_avoids(ev: &Ev, over: bool, last: bool, out: &mut Vec<(f64, f64, f64)>) {
+    let s = if over { -1.0 } else { 1.0 };
+    for hd in &ev.heads {
+        let Some(acc) = hd.acc else { continue };
+        let bb = glyph(crate::engrave::acc_name(acc)).bbox;
+        let x = ev.x + hd.acc_x.unwrap_or(0.0);
+        let y = y_of(hd.pos) + if over { bb[1] } else { bb[3] };
+        let clear = if last { SLUR_CLEAR_LAST } else { SLUR_CLEAR };
+        out.extend(slur_box([x + bb[0], y, x + bb[2], y], over, clear));
+    }
+    if last {
+        return;
+    }
+    let (y, w) = (slur_head(ev, over), ev.head_w.unwrap_or(0.0));
+    out.extend([(ev.x + w / 2.0, y + s * 0.5, SLUR_CLEAR), (ev.x + 0.1 * w, y + s * 0.3, SLUR_CLEAR), (ev.x + 0.9 * w, y + s * 0.3, SLUR_CLEAR)]);
+    if let Some(sx) = slur_stem(ev, over) {
+        out.extend(slur_box([sx, ev.stem_end, sx, ev.stem_end], over, SLUR_CLEAR));
+    }
+    for b in slur_scripts(ev, over) {
+        out.extend(slur_box(b, over, SLUR_CLEAR));
+    }
+}
+
+/// What a slur clears of a box `[left, top, right, bottom]`: its edge on the
+/// slur's side by `clear`, and a little to each side of it — a slur that
+/// comes down steeply past a corner keeps off it too.
+fn slur_box(b: [f64; 4], over: bool, clear: f64) -> [(f64, f64, f64); 5] {
+    let y = if over { b[1] } else { b[3] };
+    let beside = (clear - 0.2).max(0.0);
+    [(b[0], y, clear), ((b[0] + b[2]) / 2.0, y, clear), (b[2], y, clear), (b[0] - beside, y, 0.2), (b[2] + beside, y, 0.2)]
+}
+
+/// A slur's shape between two ends: how far out of the line between them
+/// its two control points stand, and how far in from its ends.
+#[derive(Clone, Copy)]
+struct Bow {
+    xa: f64,
+    ya: f64,
+    xb: f64,
+    yb: f64,
+    /// The control point after its start, out of the line.
+    ca: f64,
+    /// … before its end.
+    cb: f64,
+    inset: f64,
+}
+
+impl Bow {
+    /// Its middle line's control points, arched to the side `s`.
+    fn points(&self, s: f64) -> [(f64, f64); 4] {
+        [(self.xa, self.ya), (self.xa + self.inset, self.ya + s * self.ca), (self.xb - self.inset, self.yb + s * self.cb), (self.xb, self.yb)]
+    }
+}
+
+/// How far out its control points stand for a slur of LilyPond's height
+/// over `width`.
+fn slur_plain(width: f64) -> f64 {
+    curve_height(width, 2.0, 0.25) * 4.0 / 3.0
+}
+
+/// The least arch from `(xa, ya)` to `(xb, yb)` that clears every point of
+/// `avoid` on the side `s`: LilyPond's height for its width, or higher —
+/// on the side of what is in its way more than on the other, and never
+/// more than twice as high on one side as on the other.
+fn slur_bow(avoid: &[(f64, f64, f64)], xa: f64, ya: f64, xb: f64, yb: f64, s: f64) -> Bow {
+    let w = xb - xa;
+    let inset = w * 0.25;
+    let (mut ca, mut cb) = (slur_plain(w), slur_plain(w));
+    for &(px, py, clear) in avoid {
+        if px <= xa + 0.05 || px >= xb - 0.05 {
+            continue;
+        }
+        // Where along the curve it passes `px`: its x grows with t.
+        let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+        for _ in 0..22 {
+            let t = (lo + hi) / 2.0;
+            let u = 1.0 - t;
+            let x = xa * u * u * u + 3.0 * (xa + inset) * u * u * t + 3.0 * (xb - inset) * u * t * t + xb * t * t * t;
+            if x < px {
+                lo = t;
+            } else {
+                hi = t;
+            }
+        }
+        let t = (lo + hi) / 2.0;
+        let u = 1.0 - t;
+        // There, y = chord + s · (b1 · ca + b2 · cb).
+        let chord = ya + (yb - ya) * (3.0 * t * t - 2.0 * t * t * t);
+        let (b1, b2) = (3.0 * u * u * t, 3.0 * u * t * t);
+        let short = clear + RULE.curve_mid / 2.0 + s * (py - chord) - (b1 * ca + b2 * cb);
+        if short > 0.0 {
+            let k = short / (b1 * b1 + b2 * b2).max(1e-9);
+            ca += k * b1;
+            cb += k * b2;
+        }
+    }
+    let least = ca.max(cb) / 2.0;
+    Bow { xa, ya, xb, yb, ca: ca.max(least), cb: cb.max(least), inset }
+}
+
+/// What an arch higher than its width's costs: little for a little, and
+/// more and more — a slur lifts its ends rather than balloon.
+fn slur_height_cost(bow: &Bow) -> f64 {
+    let over = (bow.ca.max(bow.cb) - slur_plain(bow.xb - bow.xa)).max(0.0) * 0.75;
+    2.0 * over + 0.5 * over * over
+}
+
+/// A slur from `ends.0` to `ends.1`; `forced` the direction a setting gives
+/// it (`\slurUp`: 1), over the one its notes and voice give it; `out` how
+/// much farther out each end stands (a phrasing slur's over a slur's).
 #[allow(clippy::too_many_arguments)]
-fn slur(lines: &mut [Line], bars: &[Bar], notes: &[At], first: At, last: At, extra: f64, forced: Option<i64>) {
+fn slur(lines: &mut [Line], bars: &[Bar], notes: &[At], ends: (At, At), kind: CurveKind, out: (f64, f64), forced: Option<i64>, drawn: &mut Vec<Drawn>) {
     let ev_at = |at: At| -> &Ev { &bars[at.0].items[at.1] };
-    let (f, l) = (ev_at(first), ev_at(last));
+    let (f, l) = (ev_at(ends.0), ev_at(ends.1));
     let (fnum, lnum) = (f.n.unwrap_or(0), l.n.unwrap_or(0));
     let ups: Vec<&Ev> = notes.iter().map(|&a| ev_at(a)).filter(|ev| ev.n.unwrap_or(0) >= fnum && ev.n.unwrap_or(0) <= lnum && voice_of(ev) == voice_of(f)).collect();
     let all_up = ups.iter().all(|ev| ev.up);
@@ -496,109 +802,148 @@ fn slur(lines: &mut [Line], bars: &[Bar], notes: &[At], first: At, last: At, ext
     if let Some(d) = forced {
         over = d > 0;
     }
-    let dir = if over { -1.0 } else { 1.0 };
-    let e0 = slur_end(f, over);
-    let e1 = slur_end(l, over);
-    let inner: Vec<&Ev> = ups.iter().copied().filter(|ev| ev.n != f.n && ev.n != l.n).collect();
-    let (e0, e1) = ((e0.0, e0.1 + dir * extra), (e1.0, e1.1 + dir * extra));
-    if f.sys == l.sys {
-        slur_piece(&mut lines[f.sys], &inner, e0.0, e0.1, e1.0, e1.1, dir, over);
-        return;
-    }
-    let mine: Vec<&Ev> = inner.iter().copied().filter(|ev| ev.sys == f.sys).collect();
-    let end = lines[f.sys].bar_end - 0.5;
-    slur_piece(&mut lines[f.sys], &mine, e0.0, e0.1, end, e0.1, dir, over);
-    let theirs: Vec<&Ev> = inner.iter().copied().filter(|ev| ev.sys == l.sys).collect();
-    let start = lines[l.sys].prefix - 0.6;
-    slur_piece(&mut lines[l.sys], &theirs, start, e1.1, e1.0, e1.1, dir, over);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn slur_piece(line: &mut Line, inner: &[&Ev], xa: f64, mut ya: f64, xb: f64, mut yb: f64, dir: f64, over: bool) {
-    let width = xb - xa;
-    if width <= 0.2 {
-        return;
-    }
-    let rise = yb - ya;
-    let most = 0.125 * width;
-    if rise.abs() > most {
-        if (rise > 0.0) == (dir < 0.0) {
-            yb = ya + if rise > 0.0 { most } else { -most };
-        } else {
-            ya = yb - if rise > 0.0 { most } else { -most };
-        }
-    }
-    let mut blocked = false;
-    for ev in inner {
-        let u = (ev.x + ev.head_w.unwrap_or(0.0) / 2.0 - xa) / width;
-        let p = slur_end(ev, over);
-        let base = ya + (yb - ya) * u;
-        if u > 0.0 && u < 1.0 && (base - p.1) * -dir > 0.0 {
-            blocked = true;
-        }
-    }
-    if blocked {
-        let level = if dir < 0.0 { ya.min(yb) } else { ya.max(yb) };
-        ya = level;
-        yb = level;
-    }
-    let mut hgt = curve_height(width, 2.0, 0.25);
-    let mut lift: f64 = 0.0;
-    for ev in inner {
-        let u = (ev.x + ev.head_w.unwrap_or(0.0) / 2.0 - xa) / width;
-        if u <= 0.0 || u >= 1.0 {
-            continue;
-        }
-        let p = slur_end(ev, over);
-        let base = ya + (yb - ya) * u;
-        let need = (base - p.1) * -dir;
-        let bulge = 4.0 * u * (1.0 - u);
-        if need > hgt * bulge {
-            let want = need / bulge;
-            if want <= 3.0 {
-                hgt = want;
+    let s = if over { -1.0 } else { 1.0 };
+    // A beam that goes on under the slur from its first note, or comes
+    // from under it to its last.
+    let beam_in = |at: At, left: bool| {
+        let ev = ev_at(at);
+        ev.beam.and_then(|g| bars[at.0].beams.get(g)).is_some_and(|g| if left { g.notes.last() != Some(&at.1) } else { g.notes.first() != Some(&at.1) })
+    };
+    let mut tips = (slur_tip(f, over, true, beam_in(ends.0, true)), slur_tip(l, over, false, beam_in(ends.1, false)));
+    // Past the articulations of the notes it starts and ends on: beyond one
+    // over its end, round one beside it.
+    let mut end_avoid: Vec<(usize, f64, f64, f64)> = Vec::new();
+    for (tip, ev, push) in [(&mut tips.0, f, out.0), (&mut tips.1, l, out.1)] {
+        for b in slur_scripts(ev, over) {
+            if tip.stem.is_none() && b[0] < tip.x + 0.4 && b[2] > tip.x - 0.4 {
+                tip.y = s * (s * tip.y).max(s * if over { b[1] } else { b[3] } + 0.35);
             } else {
-                hgt = 3.0;
-                lift = lift.max(need - 3.0 * bulge);
+                end_avoid.extend(slur_box(b, over, SLUR_CLEAR).map(|a| (ev.sys, a.0, a.1, a.2)));
             }
         }
+        tip.y += s * push;
     }
-    ya += dir * lift;
-    yb += dir * lift;
-    arc_h(line, xa, ya, xb, yb, dir, hgt);
-}
-
-fn slur_end(ev: &Ev, over: bool) -> (f64, f64) {
-    let mid_x = ev.x + ev.head_w.unwrap_or(0.0) / 2.0;
-    if over {
-        let top = y_of(ev.heads.last().map_or(0, |h| h.pos)) - 0.75;
-        if ev.up && ev.base > 1 {
-            return (stem_x(ev) - 0.06, ev.stem_end - 0.3);
+    let from = Source { kind, item: f.i, at: f.at, head: None, piece: 0 };
+    // What it goes round on a line: its own notes there, and for a
+    // phrasing slur the slurs under it.
+    let avoid_on = |sys: usize, drawn: &[Drawn]| -> Vec<(f64, f64, f64)> {
+        let mut avoid: Vec<(f64, f64, f64)> = end_avoid.iter().filter(|a| a.0 == sys).map(|a| (a.1, a.2, a.3)).collect();
+        for ev in ups.iter().filter(|ev| ev.sys == sys && ev.n != f.n) {
+            slur_avoids(ev, over, ev.n == l.n, &mut avoid);
         }
-        return (mid_x, top);
+        if kind == CurveKind::Phrase {
+            for d in drawn.iter().filter(|d| d.sys == sys && d.voice == voice_of(f) && d.first <= lnum && d.last >= fnum) {
+                for k in 1..10 {
+                    let (x, y) = bezier(&d.points, f64::from(k) / 10.0);
+                    avoid.push((x, y, SLUR_CLEAR));
+                }
+            }
+        }
+        avoid
+    };
+    let keep = |line: &mut Line, drawn: &mut Vec<Drawn>, sys: usize, bow: Bow, from: Source| {
+        let points = bow.points(s);
+        drawn.push(Drawn { sys, voice: voice_of(f), first: fnum, last: lnum, points });
+        line.curves.push(curve_outline(&points, s));
+        line.curve_places.push(CurvePlace { kind: from.kind, item: from.item, at: from.at, head: None, points, up: over, piece: from.piece });
+    };
+    if f.sys == l.sys {
+        let avoid = avoid_on(f.sys, drawn);
+        // The notes' own slope, head to head.
+        let rise = slur_head(l, over) - slur_head(f, over);
+        let beams = tips.0.beamed || tips.1.beamed;
+        let stems = tips.0.stem.is_some() || tips.1.stem.is_some();
+        let mut best: Option<(f64, Bow)> = None;
+        for la in SLUR_LIFTS {
+            for lb in SLUR_LIFTS {
+                let ((xa, ya), (xb, yb)) = (tips.0.at(la, s, true), tips.1.at(lb, s, false));
+                if xb - xa <= 0.2 {
+                    continue;
+                }
+                let bow = slur_bow(&avoid, xa, ya, xb, yb, s);
+                let dy = yb - ya;
+                let mut cost = tips.0.pull * la + tips.1.pull * lb + slur_height_cost(&bow);
+                cost += SLUR_STEEPER * (dy.abs() - rise.abs() - 0.2 - if beams { 1.0 } else { 0.0 }).max(0.0);
+                cost += SLUR_MAX_SLOPE_FACTOR * ((dy / (xb - xa)).abs() - SLUR_MAX_SLOPE).max(0.0);
+                if rise == 0.0 && dy.abs() > 1e-6 {
+                    cost += SLUR_TILTED;
+                }
+                if rise * dy < -1e-9 {
+                    // A stem under an end tilts a slur as a beam does: it
+                    // starts by the stem's end to clear the stems after it.
+                    cost += if beams || stems { SLUR_AGAINST / 10.0 } else { SLUR_AGAINST };
+                }
+                cost += [ya, yb].iter().filter(|y| on_line(**y, 0.12)).count() as f64 * SLUR_ON_LINE;
+                if best.as_ref().is_none_or(|b| cost < b.0 - 1e-9) {
+                    best = Some((cost, bow));
+                }
+            }
+        }
+        if let Some((_, bow)) = best {
+            keep(&mut lines[f.sys], drawn, f.sys, bow, from);
+        }
+        return;
     }
-    let low = y_of(ev.heads.first().map_or(0, |h| h.pos)) + 0.75;
-    if !ev.up && ev.base > 1 {
-        return (stem_x(ev) + 0.06, ev.stem_end + 0.3);
+    // Over a line's end: level to the end of the first line, and from the
+    // start of the last.
+    let end = lines[f.sys].bar_end - 0.5;
+    let start = lines[l.sys].prefix - 0.6;
+    for (sys, tip, left, other, piece) in [(f.sys, tips.0, true, end, 0), (l.sys, tips.1, false, start, 1)] {
+        let avoid = avoid_on(sys, drawn);
+        let mut best: Option<(f64, Bow)> = None;
+        for lift in SLUR_LIFTS {
+            let (x, y) = tip.at(lift, s, left);
+            // Its open end, at the line's: level with the other, or
+            // farther out to clear what is between.
+            for open in SLUR_LIFTS {
+                let far = y + s * open;
+                let (xa, ya, xb, yb) = if left { (x, y, other, far) } else { (other, far, x, y) };
+                if xb - xa <= 0.2 {
+                    continue;
+                }
+                let bow = slur_bow(&avoid, xa, ya, xb, yb, s);
+                let cost = tip.pull * lift + SLUR_EDGE_STEM * open + slur_height_cost(&bow) + if on_line(y, 0.12) { SLUR_ON_LINE } else { 0.0 };
+                if best.as_ref().is_none_or(|b| cost < b.0 - 1e-9) {
+                    best = Some((cost, bow));
+                }
+            }
+        }
+        if let Some((_, bow)) = best {
+            keep(&mut lines[sys], drawn, sys, bow, Source { piece, ..from });
+        }
     }
-    (mid_x, low)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn arc(line: &mut Line, xa: f64, ya: f64, xb: f64, yb: f64, dir: f64, limit: f64, ratio: f64) {
-    let hgt = curve_height((xb - xa).max(0.1), limit, ratio);
-    arc_h(line, xa, ya, xb, yb, dir, hgt);
+/// A point of a cubic curve.
+pub(crate) fn bezier(p: &[(f64, f64); 4], t: f64) -> (f64, f64) {
+    let u = 1.0 - t;
+    let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+    (a * p[0].0 + b * p[1].0 + c * p[2].0 + d * p[3].0, a * p[0].1 + b * p[1].1 + c * p[2].1 + d * p[3].1)
 }
 
-/// A curve as a closed outline: out along the outer Bézier, back along the
-/// inner one, `RULE.curve_tip` thick at the ends and `curve_mid` between.
-fn arc_h(line: &mut Line, xa: f64, ya: f64, xb: f64, yb: f64, dir: f64, hgt: f64) {
+/// A tie: LilyPond's height for its width.
+fn arc(line: &mut Line, from: Source, xa: f64, ya: f64, xb: f64, yb: f64, dir: f64) {
+    let hgt = curve_height((xb - xa).max(0.1), 1.0, 0.333);
     if let Some(cmds) = arc_cmds(xa, ya, xb, yb, dir, hgt) {
+        let inset = (xb - xa) * 0.25;
+        let c = hgt * 4.0 / 3.0;
+        let points = [(xa, ya), (xa + inset, ya + dir * c), (xb - inset, yb + dir * c), (xb, yb)];
         line.curves.push(cmds);
+        line.curve_places.push(CurvePlace { kind: from.kind, item: from.item, at: from.at, head: from.head, points, up: dir < 0.0, piece: from.piece });
     }
 }
 
-/// [`arc_h`]'s outline, or none for a curve with no width.
+/// A curve as a closed outline round its middle line's control points: out
+/// along the outer Bézier, back along the inner one, `RULE.curve_tip` thick
+/// at the ends and `curve_mid` between; `dir` the side it arches to.
+pub(crate) fn curve_outline(p: &[(f64, f64); 4], dir: f64) -> Vec<f64> {
+    let m = dir * RULE.curve_mid / 2.0 * 4.0 / 3.0;
+    let t2 = dir * RULE.curve_tip / 2.0;
+    vec![0.0, p[0].0, p[0].1 + t2, 3.0, p[1].0, p[1].1 + m, p[2].0, p[2].1 + m, p[3].0, p[3].1 + t2, 1.0, p[3].0, p[3].1 - t2, 3.0, p[2].0, p[2].1 - m, p[1].0, p[1].1 - m, p[0].0, p[0].1 - t2, 4.0]
+}
+
+/// A curve's outline from its ends and its height ([`curve_outline`]), or
+/// none for a curve with no width.
 pub(crate) fn arc_cmds(xa: f64, ya: f64, xb: f64, yb: f64, dir: f64, hgt: f64) -> Option<Vec<f64>> {
     let w = xb - xa;
     if w <= 0.0 {
@@ -1139,158 +1484,278 @@ pub(crate) fn item_w(ev: &Ev) -> f64 {
     glyph(rest_name(ev.base)).advance
 }
 
+/// The articulations a slur goes round, with their note: LilyPond's
+/// `avoid-slur` `inside`. The others — ornaments, fermatas, bowings,
+/// fingerings — stand outside a slur that passes there.
+const INSIDE_SLUR: [&str; 6] = ["staccato", "tenuto", "accent", "marcato", "staccatissimo", "portato"];
+
+/// A note's articulations and fingerings where they stand, and how far
+/// they reach.
+pub(crate) struct Stack {
+    /// Each one, nearest the note first on its side.
+    pub(crate) placed: Vec<ScriptPlace>,
+    /// Which of them a slur on their side goes round.
+    pub(crate) inside: Vec<bool>,
+    /// How far the stack reaches up.
+    up: f64,
+    /// … and down.
+    down: f64,
+}
+
+/// One note's or rest's articulations and fingerings, stacked from its
+/// head or its stem outward. `slurs` are the slurs drawn on its line, as
+/// outlines: what is not an articulation next to the note (`INSIDE_SLUR`)
+/// goes past a slur it would stand in. With none given, the stack is the
+/// one the slurs themselves are drawn round.
+pub(crate) fn script_stack(ev: &Ev, slurs: &[&[f64]]) -> Stack {
+    let ext = item_extent(ev);
+    let mut stack = Stack { placed: Vec::new(), inside: Vec::new(), up: ext.0, down: ext.1 };
+    if ev.scripts.is_empty() && ev.fingers.is_empty() {
+        return stack;
+    }
+    let xc = ev.x + item_w(ev) / 2.0;
+    let note = ev.k == Kind::Note;
+    let heads_top = if note { y_of(ev.heads.last().map_or(0, |h| h.pos)) - 0.5 } else { 1.0 + rest_lift(ev) };
+    let heads_bottom = if note { y_of(ev.heads.first().map_or(0, |h| h.pos)) + 0.5 } else { 3.0 + rest_lift(ev) };
+    let mut up_cursor = heads_top;
+    let mut down_cursor = heads_bottom;
+    if note && ev.up {
+        up_cursor = ext.0;
+    }
+    if note && !ev.up {
+        down_cursor = ext.1;
+    }
+    // Past a slur in the way: from `cursor` a box `(top, bottom)` high from
+    // its origin, half `hw` wide, set `pad` off on the side `dir`.
+    let past_slur = |cursor: f64, pad: f64, bb: (f64, f64), hw: f64, dir: i64| -> f64 {
+        let mut cursor = cursor;
+        for c in slurs {
+            let Some((lo, hi)) = curve_span(c, xc - hw - 0.1, xc + hw + 0.1) else { continue };
+            let y = if dir < 0 { cursor - pad - bb.1 } else { cursor + pad - bb.0 };
+            if y + bb.1 + 0.1 > lo && y + bb.0 - 0.1 < hi {
+                cursor = if dir < 0 { cursor.min(lo) } else { cursor.max(hi) };
+            }
+        }
+        cursor
+    };
+    // A fingering stacks with the articulations, nearer the note than
+    // a fermata, farther than a staccato (LilyPond's priority 100),
+    // above unless written under.
+    // A chord's: the upper half's above it, the lower half's under
+    // it, each nearest its own head.
+    let mut heads: Vec<i64> = ev.heads.iter().map(|h| h.d).collect();
+    heads.sort_unstable();
+    let finger_dir = |f: &crate::parse::Finger| match (f.dir, f.head) {
+        (0, Some(d)) if heads.len() > 1 => {
+            let rank = heads.iter().position(|&h| h == d).unwrap_or(0);
+            if rank * 2 >= heads.len() {
+                -1
+            } else {
+                1
+            }
+        }
+        (0, _) => -1,
+        (dir, _) => dir,
+    };
+    // `\override Fingering.direction`: where one written with `-` goes.
+    let finger_side = ev.look.side("Fingering");
+    let finger_dir = |f: &crate::parse::Finger| if f.dir == 0 { finger_side.unwrap_or_else(|| finger_dir(f)) } else { finger_dir(f) };
+    let mut fingers: Vec<(usize, &crate::parse::Finger, i64)> = ev.fingers.iter().enumerate().map(|(k, f)| (k, f, finger_dir(f))).collect();
+    fingers.sort_by_key(|(_, f, dir)| f.head.unwrap_or(0) * -dir);
+    let mut list: Vec<(&str, i64, Option<&str>, bool, usize)> = ev.scripts.iter().enumerate().map(|(k, sc)| (sc.name.as_str(), sc.dir, None, false, k)).collect();
+    list.extend(fingers.iter().map(|(k, f, dir)| ("", *dir, Some(f.text.as_str()), f.circled, *k)));
+    list.sort_by_key(|sc| if sc.2.is_some() { 100 } else { script_rule(sc.0).prio });
+    let finger_pad = ev.look.num("Fingering.padding").unwrap_or(0.5);
+    // Once something that stands outside a slur is placed on a side, what
+    // is stacked on it is outside too.
+    let (mut out_up, mut out_down) = (false, false);
+    for (name, sdir, figure, circled, index) in list {
+        if let Some(figure) = figure {
+            let bb = if circled { (-STRING_R - 0.05, STRING_R + 0.05) } else { figure_box(figure) };
+            let hw = if circled { STRING_R } else { figure_width(figure) / 2.0 };
+            let y;
+            if sdir < 0 {
+                up_cursor = past_slur(up_cursor, finger_pad, bb, hw, -1);
+                y = up_cursor - finger_pad - bb.1;
+                up_cursor = y + bb.0;
+                out_up = true;
+            } else {
+                down_cursor = past_slur(down_cursor, finger_pad, bb, hw, 1);
+                y = down_cursor + finger_pad - bb.0;
+                down_cursor = y + bb.1;
+                out_down = true;
+            }
+            stack.placed.push(ScriptPlace { glyph: "", x: xc, y, figure: Some(figure.to_owned()), k: if circled { STRING_K } else { FINGER_K }, circled, item: ev.i, index });
+            stack.inside.push(false);
+            continue;
+        }
+        let inside = INSIDE_SLUR.contains(&name);
+        let mut rule = script_rule(name);
+        if let Some(pad) = ev.look.num("Script.padding") {
+            rule.pad = pad;
+        }
+        let mut dir = sdir;
+        // `\override Script.direction`: where one written with `-` goes.
+        if dir == 0 {
+            dir = ev.look.side("Script").unwrap_or(0);
+        }
+        // Two voices: the first's over its stems, the second's under
+        // them, as `\voiceOne` and `\voiceTwo` set Script.direction —
+        // opposite the stem, the first's would sit in the second's notes.
+        if dir == 0 {
+            if let Some(v) = ev.voice.filter(|_| !ev.free) {
+                dir = if v % 2 == 1 { -1 } else { 1 };
+            }
+        }
+        if dir == 0 && rule.side != 0 {
+            dir = rule.side;
+        }
+        if dir == 0 {
+            dir = if ev.up { 1 } else { -1 };
+        }
+        let name = if dir < 0 { rule.up } else { rule.down };
+        let bb = glyph(name).bbox;
+        let hw = (bb[2] - bb[0]) / 2.0;
+        let mut y;
+        if dir < 0 {
+            out_up |= !inside;
+            if out_up {
+                up_cursor = past_slur(up_cursor, rule.pad, (bb[1], bb[3]), hw, -1);
+            }
+            y = up_cursor - rule.pad - bb[3];
+            if rule.quant {
+                let mid = y + (bb[1] + bb[3]) / 2.0;
+                if mid > -0.5 && mid < 4.5 {
+                    y += space_above(mid) - mid;
+                }
+            } else if y + bb[3] > -0.25 {
+                y = -0.25 - bb[3];
+            }
+            up_cursor = y + bb[1];
+            stack.inside.push(!out_up);
+        } else {
+            out_down |= !inside;
+            if out_down {
+                down_cursor = past_slur(down_cursor, rule.pad, (bb[1], bb[3]), hw, 1);
+            }
+            y = down_cursor + rule.pad - bb[1];
+            if rule.quant {
+                let mid = y + (bb[1] + bb[3]) / 2.0;
+                if mid > -0.5 && mid < 4.5 {
+                    y += space_below(mid) - mid;
+                }
+            } else if y + bb[1] < 4.25 {
+                y = 4.25 - bb[1];
+            }
+            down_cursor = y + bb[3];
+            stack.inside.push(!out_down);
+        }
+        stack.placed.push(ScriptPlace { glyph: name, x: xc, y, figure: None, k: 1.0, circled: false, item: ev.i, index });
+    }
+    // Moved where a setting says: `X-offset` and `Y-offset` from the
+    // note's head and the middle line, `extra-offset` from where they
+    // were placed — after the placing, as LilyPond's moves them.
+    for sc in &mut stack.placed {
+        let grob = if sc.figure.is_some() { "Fingering" } else { "Script" };
+        if let Some(x) = ev.look.num(&format!("{grob}.X-offset")) {
+            sc.x = ev.x + x;
+        }
+        if let Some(y) = ev.look.num(&format!("{grob}.Y-offset")) {
+            let mid = match &sc.figure {
+                Some(f) => {
+                    let bb = figure_box(f);
+                    (bb.0 + bb.1) / 2.0
+                }
+                None => {
+                    let bb = glyph(sc.glyph).bbox;
+                    (bb[1] + bb[3]) / 2.0
+                }
+            };
+            sc.y = 2.0 - y - mid;
+        }
+        let (dx, dy) = ev.look.extra(grob);
+        sc.x += dx;
+        sc.y += dy;
+    }
+    if ev.look.omitted("Script") {
+        let keep: Vec<bool> = stack.placed.iter().map(|sc| sc.figure.is_some()).collect();
+        let mut k = 0;
+        stack.placed.retain(|_| {
+            k += 1;
+            keep[k - 1]
+        });
+        k = 0;
+        stack.inside.retain(|_| {
+            k += 1;
+            keep[k - 1]
+        });
+    }
+    stack.up = ext.0.min(up_cursor);
+    stack.down = ext.1.max(down_cursor);
+    stack
+}
+
+/// The articulations and fingerings of a line: each note's stack, the
+/// articulations nearest the notes where the slurs were drawn round them
+/// ([`curves`]), the rest past any slur in the way.
 fn scripts(bars: &mut [Bar], line: &mut Line) {
     line.scripts = Vec::new();
+    let slurs: Vec<&[f64]> = line.curve_places.iter().zip(&line.curves).filter(|(p, _)| p.kind != CurveKind::Tie).map(|(_, c)| c.as_slice()).collect();
     for b in line.bars.clone() {
         for ev in &mut bars[b].items {
-            let ext = item_extent(ev);
-            ev.reach_up = Some(ext.0);
-            ev.reach_down = Some(ext.1);
-            if ev.scripts.is_empty() && ev.fingers.is_empty() {
-                continue;
-            }
-            let xc = ev.x + item_w(ev) / 2.0;
-            let note = ev.k == Kind::Note;
-            let heads_top = if note { y_of(ev.heads.last().map_or(0, |h| h.pos)) - 0.5 } else { 1.0 + rest_lift(ev) };
-            let heads_bottom = if note { y_of(ev.heads.first().map_or(0, |h| h.pos)) + 0.5 } else { 3.0 + rest_lift(ev) };
-            let mut up_cursor = heads_top;
-            let mut down_cursor = heads_bottom;
-            if note && ev.up {
-                up_cursor = ext.0;
-            }
-            if note && !ev.up {
-                down_cursor = ext.1;
-            }
-            // A fingering stacks with the articulations, nearer the note than
-            // a fermata, farther than a staccato (LilyPond's priority 100),
-            // above unless written under.
-            // A chord's: the upper half's above it, the lower half's under
-            // it, each nearest its own head.
-            let mut heads: Vec<i64> = ev.heads.iter().map(|h| h.d).collect();
-            heads.sort_unstable();
-            let finger_dir = |f: &crate::parse::Finger| match (f.dir, f.head) {
-                (0, Some(d)) if heads.len() > 1 => {
-                    let rank = heads.iter().position(|&h| h == d).unwrap_or(0);
-                    if rank * 2 >= heads.len() {
-                        -1
-                    } else {
-                        1
-                    }
-                }
-                (0, _) => -1,
-                (dir, _) => dir,
-            };
-            // `\override Fingering.direction`: where one written with `-` goes.
-            let finger_side = ev.look.side("Fingering");
-            let finger_dir = |f: &crate::parse::Finger| if f.dir == 0 { finger_side.unwrap_or_else(|| finger_dir(f)) } else { finger_dir(f) };
-            let mut fingers: Vec<(&crate::parse::Finger, i64)> = ev.fingers.iter().map(|f| (f, finger_dir(f))).collect();
-            fingers.sort_by_key(|(f, dir)| f.head.unwrap_or(0) * -dir);
-            let mut list: Vec<(&str, i64, Option<&str>, bool)> = ev.scripts.iter().map(|sc| (sc.name.as_str(), sc.dir, None, false)).collect();
-            list.extend(fingers.iter().map(|(f, dir)| ("", *dir, Some(f.text.as_str()), f.circled)));
-            list.sort_by_key(|sc| if sc.2.is_some() { 100 } else { script_rule(sc.0).prio });
-            let first_placed = line.scripts.len();
-            let finger_pad = ev.look.num("Fingering.padding").unwrap_or(0.5);
-            for (name, sdir, figure, circled) in list {
-                if let Some(figure) = figure {
-                    let bb = if circled { (-STRING_R - 0.05, STRING_R + 0.05) } else { figure_box(figure) };
-                    let y;
-                    if sdir < 0 {
-                        y = up_cursor - finger_pad - bb.1;
-                        up_cursor = y + bb.0;
-                    } else {
-                        y = down_cursor + finger_pad - bb.0;
-                        down_cursor = y + bb.1;
-                    }
-                    line.scripts.push(ScriptPlace { glyph: "", x: xc, y, figure: Some(figure.to_owned()), k: if circled { STRING_K } else { FINGER_K }, circled });
-                    continue;
-                }
-                let mut rule = script_rule(name);
-                if let Some(pad) = ev.look.num("Script.padding") {
-                    rule.pad = pad;
-                }
-                let mut dir = sdir;
-                // `\override Script.direction`: where one written with `-` goes.
-                if dir == 0 {
-                    dir = ev.look.side("Script").unwrap_or(0);
-                }
-                // Two voices: the first's over its stems, the second's under
-                // them, as `\voiceOne` and `\voiceTwo` set Script.direction —
-                // opposite the stem, the first's would sit in the second's notes.
-                if dir == 0 {
-                    if let Some(v) = ev.voice.filter(|_| !ev.free) {
-                        dir = if v % 2 == 1 { -1 } else { 1 };
-                    }
-                }
-                if dir == 0 && rule.side != 0 {
-                    dir = rule.side;
-                }
-                if dir == 0 {
-                    dir = if ev.up { 1 } else { -1 };
-                }
-                let name = if dir < 0 { rule.up } else { rule.down };
-                let bb = glyph(name).bbox;
-                let mut y;
-                if dir < 0 {
-                    y = up_cursor - rule.pad - bb[3];
-                    if rule.quant {
-                        let mid = y + (bb[1] + bb[3]) / 2.0;
-                        if mid > -0.5 && mid < 4.5 {
-                            y += space_above(mid) - mid;
-                        }
-                    } else if y + bb[3] > -0.25 {
-                        y = -0.25 - bb[3];
-                    }
-                    up_cursor = y + bb[1];
-                } else {
-                    y = down_cursor + rule.pad - bb[1];
-                    if rule.quant {
-                        let mid = y + (bb[1] + bb[3]) / 2.0;
-                        if mid > -0.5 && mid < 4.5 {
-                            y += space_below(mid) - mid;
-                        }
-                    } else if y + bb[1] < 4.25 {
-                        y = 4.25 - bb[1];
-                    }
-                    down_cursor = y + bb[3];
-                }
-                line.scripts.push(ScriptPlace { glyph: name, x: xc, y, figure: None, k: 1.0, circled: false });
-            }
-            // Moved where a setting says: `X-offset` and `Y-offset` from the
-            // note's head and the middle line, `extra-offset` from where they
-            // were placed — after the placing, as LilyPond's moves them.
-            for sc in &mut line.scripts[first_placed..] {
-                let grob = if sc.figure.is_some() { "Fingering" } else { "Script" };
-                if let Some(x) = ev.look.num(&format!("{grob}.X-offset")) {
-                    sc.x = ev.x + x;
-                }
-                if let Some(y) = ev.look.num(&format!("{grob}.Y-offset")) {
-                    let mid = match &sc.figure {
-                        Some(f) => {
-                            let bb = figure_box(f);
-                            (bb.0 + bb.1) / 2.0
-                        }
-                        None => {
-                            let bb = glyph(sc.glyph).bbox;
-                            (bb[1] + bb[3]) / 2.0
-                        }
-                    };
-                    sc.y = 2.0 - y - mid;
-                }
-                let (dx, dy) = ev.look.extra(grob);
-                sc.x += dx;
-                sc.y += dy;
-            }
-            if ev.look.omitted("Script") {
-                let mut k = 0;
-                line.scripts.retain(|sc| {
-                    k += 1;
-                    k <= first_placed || sc.figure.is_some()
-                });
-            }
-            ev.reach_up = Some(ext.0.min(up_cursor));
-            ev.reach_down = Some(ext.1.max(down_cursor));
+            let stack = script_stack(ev, &slurs);
+            ev.reach_up = Some(stack.up);
+            ev.reach_down = Some(stack.down);
+            line.scripts.extend(stack.placed);
         }
     }
+}
+
+/// How far a curve's outline reaches between `x0` and `x1`: its highest
+/// and lowest y there, or none when it does not pass.
+pub(crate) fn curve_span(cmds: &[f64], x0: f64, x1: f64) -> Option<(f64, f64)> {
+    let mut span: Option<(f64, f64)> = None;
+    let mut last: Option<(f64, f64)> = None;
+    // Each stretch of the outline, cut to the window.
+    let mut keep = |x: f64, y: f64, pen_up: bool| {
+        if let Some((px, py)) = last.filter(|_| !pen_up) {
+            let (lo, hi) = (px.min(x), px.max(x));
+            if hi >= x0 && lo <= x1 {
+                let at = |xx: f64| if (x - px).abs() < 1e-9 { y } else { py + (y - py) * (xx - px) / (x - px) };
+                for yy in [at(lo.max(x0)), at(hi.min(x1))] {
+                    span = Some(span.map_or((yy, yy), |s: (f64, f64)| (s.0.min(yy), s.1.max(yy))));
+                }
+                if (x - px).abs() < 1e-9 {
+                    span = span.map(|s| (s.0.min(py), s.1.max(py)));
+                }
+            }
+        }
+        last = Some((x, y));
+    };
+    let (mut cx, mut cy) = (0.0, 0.0);
+    let mut ci = 0;
+    while ci < cmds.len() {
+        match cmds[ci] as i64 {
+            0 | 1 if ci + 2 < cmds.len() => {
+                (cx, cy) = (cmds[ci + 1], cmds[ci + 2]);
+                keep(cx, cy, cmds[ci] as i64 == 0);
+                ci += 3;
+            }
+            3 if ci + 6 < cmds.len() => {
+                let c = &cmds[ci + 1..ci + 7];
+                for k in 1..=24 {
+                    let t = f64::from(k) / 24.0;
+                    let u = 1.0 - t;
+                    let (a, b, d, e) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                    keep(a * cx + b * c[0] + d * c[2] + e * c[4], a * cy + b * c[1] + d * c[3] + e * c[5], false);
+                }
+                (cx, cy) = (c[4], c[5]);
+                ci += 7;
+            }
+            _ => ci += 1,
+        }
+    }
+    span
 }
 
 fn space_above(y: f64) -> f64 {

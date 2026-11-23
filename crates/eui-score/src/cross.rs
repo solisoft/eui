@@ -28,7 +28,7 @@ pub(crate) type At = (usize, usize, usize);
 
 /// What a curve between two staves is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CurveKind {
+pub enum CurveKind {
     /// `~`.
     Tie,
     /// `( )`.
