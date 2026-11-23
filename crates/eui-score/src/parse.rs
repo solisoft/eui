@@ -1044,6 +1044,20 @@ pub struct Head {
     pub paren: bool,
 }
 
+/// How an arpeggio is drawn (score #1026): `\arpeggioNormal`'s wavy line,
+/// `\arpeggioBracket`'s bracket — the chord not rolled, LilyPond's sign for
+/// it — or `\arpeggioParenthesis`'s curve.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ArpStyle {
+    /// The wavy line.
+    #[default]
+    Wave,
+    /// A bracket, its ends turned toward the chord: played together.
+    Bracket,
+    /// A curve like a slur's, standing up.
+    Paren,
+}
+
 /// One event of a staff, and once it is in a bar, everything placing it
 /// works out — the Soli engraver's hash for a note, field for field.
 #[derive(Debug, Clone, Default)]
@@ -1130,6 +1144,9 @@ pub struct Ev {
     pub phrase_off: bool,
     /// `\arpeggio`: the chord rolled, a wavy line before it.
     pub arpeggio: bool,
+    /// How that arpeggio is drawn, as `\arpeggioBracket` and its kin said
+    /// where it is written.
+    pub arp_style: ArpStyle,
     /// `\glissando` to the next note.
     pub gliss: bool,
     /// `\sustainOn`: the sustain pedal pressed with this note, "Ped."
@@ -1769,6 +1786,9 @@ struct St {
     stem: i8,
     /// `\autoBeamOff` in force.
     no_autobeam: bool,
+    /// `\arpeggioBracket`, `\arpeggioParenthesis` or `\arpeggioNormal`'s
+    /// style, in force.
+    arp_style: ArpStyle,
     /// `\showStaffSwitch` in force.
     follow: bool,
     /// A `\change Staff` read since the last note, under `\showStaffSwitch`.
@@ -3308,6 +3328,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         ossias: Vec::new(),
         stem: 0,
         no_autobeam: false,
+        arp_style: ArpStyle::Wave,
         follow: false,
         follow_next: false,
         span_stem: false,
@@ -4706,7 +4727,10 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             return Ok(i + 1);
         }
         "arpeggio" => {
-            last_note(&mut st.events, &tk)?.arpeggio = true;
+            let style = st.arp_style;
+            let last = last_note(&mut st.events, &tk)?;
+            last.arpeggio = true;
+            last.arp_style = style;
             return Ok(i + 1);
         }
         "glissando" => {
@@ -4958,6 +4982,14 @@ fn layout_command(toks: &[Tok], i: usize, st: &mut St) -> Result<Option<usize>, 
         }
         "autoBeamOff" | "autoBeamOn" => {
             st.no_autobeam = word == "autoBeamOff";
+            done(i + 1)
+        }
+        "arpeggioNormal" | "arpeggioBracket" | "arpeggioParenthesis" => {
+            st.arp_style = match word {
+                "arpeggioBracket" => ArpStyle::Bracket,
+                "arpeggioParenthesis" => ArpStyle::Paren,
+                _ => ArpStyle::Wave,
+            };
             done(i + 1)
         }
         "override" => {

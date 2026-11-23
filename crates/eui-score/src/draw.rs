@@ -13,7 +13,7 @@ use crate::engrave::{
 use crate::glyphs::{glyph, letters, Weight};
 use crate::marks::{dyn_letters, figure_width, glyph_run_w, mark_em, ottava_em, rest_lift, run_em, verse_gap, voice_of, DynEl, MarkPlace, OttavaPlace, TempoMark, TupletPlace, Volta};
 use crate::measure::{clef_mid, Bar, Beam, Opening};
-use crate::parse::{modulo, Clef, Ev, GraceKind, GroupKind, Kind, Run, Sign, StaffKind, Syllable};
+use crate::parse::{modulo, ArpStyle, Clef, Ev, GraceKind, GroupKind, Kind, Run, Sign, StaffKind, Syllable};
 use crate::text::{args_of, em, text_box, text_width};
 use crate::RULE;
 
@@ -1632,7 +1632,12 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
         }
     }
     if let Some(ax) = ev.arp_x {
-        draw_arpeggio(pen, ev.x + ax, top + y_of(hi) - 0.6, top + y_of(lo) + 0.6);
+        let x = ev.x + ax;
+        match ev.arp_style {
+            ArpStyle::Wave => draw_arpeggio(pen, x, top + y_of(hi) - 0.6, top + y_of(lo) + 0.6),
+            ArpStyle::Bracket => draw_arp_bracket(pen, x, top + y_of(hi) - ARP_BRACKET_PAST, top + y_of(lo) + ARP_BRACKET_PAST),
+            ArpStyle::Paren => draw_arp_paren(pen, x, top + y_of(hi) - 0.5, top + y_of(lo) + 0.5),
+        }
     }
     if ev.base == 1 {
         if ev.tremolo > 0 {
@@ -1867,6 +1872,65 @@ fn draw_arpeggio(pen: &mut Pen, x: f64, y0: f64, y1: f64) {
         pen.glyph("wiggleArpeggiatoUp", x, y);
         y -= step;
     }
+}
+
+/// How far `\arpeggioBracket`'s bracket reaches past the middle of the
+/// chord's outer heads: half a space past their edges, as LilyPond's
+/// `brew-chord-bracket` draws it over the heads and a space.
+const ARP_BRACKET_PAST: f64 = 1.0;
+/// How far the bracket's ends turn toward the chord: LilyPond's
+/// `Arpeggio.protrusion`.
+const ARP_BRACKET_PROTRUSION: f64 = 0.4;
+/// The height and the slope of `\arpeggioParenthesis`'s curve, LilyPond's
+/// `brew-chord-slur`: a slur's shape over the chord's heads, stood up.
+const ARP_PAREN_LIMIT: f64 = 1.5;
+const ARP_PAREN_RATIO: f64 = 0.33;
+
+/// How far a chord's heads reach, in spaces: from the low edge of the
+/// lowest to the high edge of the highest.
+fn chord_extent(ev: &Ev) -> f64 {
+    let lo = ev.heads.first().map_or(0, |h| h.pos);
+    let hi = ev.heads.last().map_or(0, |h| h.pos);
+    (hi - lo) as f64 / 2.0 + 1.0
+}
+
+/// How wide a chord's arpeggio is drawn, as its style says (score #1026).
+pub(crate) fn arpeggio_width(ev: &Ev) -> f64 {
+    match ev.arp_style {
+        ArpStyle::Wave => glyph("wiggleArpeggiatoUp").advance,
+        ArpStyle::Bracket => ARP_BRACKET_PROTRUSION + RULE.staff,
+        ArpStyle::Paren => crate::marks::curve_height(chord_extent(ev), ARP_PAREN_LIMIT, ARP_PAREN_RATIO) + RULE.curve_mid / 2.0,
+    }
+}
+
+/// `\arpeggioBracket`'s bracket at `x`, from `y0` down to `y1`: a line a
+/// staff line thick, its ends turned right, toward the chord.
+fn draw_arp_bracket(pen: &mut Pen, x: f64, y0: f64, y1: f64) {
+    let t = RULE.staff;
+    pen.rect(x, y0, t, y1 - y0);
+    pen.rect(x, y0, ARP_BRACKET_PROTRUSION + t, t);
+    pen.rect(x, y1 - t, ARP_BRACKET_PROTRUSION + t, t);
+}
+
+/// `\arpeggioParenthesis`'s curve at `x`, from `y0` down to `y1`: a slur's
+/// outline over that height, stood up, its belly to the left at `x`.
+fn draw_arp_paren(pen: &mut Pen, x: f64, y0: f64, y1: f64) {
+    let hgt = crate::marks::curve_height(y1 - y0, ARP_PAREN_LIMIT, ARP_PAREN_RATIO);
+    // Drawn lying along x from y0 to y1, bulging up (to −y), then turned:
+    // its x is the stood curve's y, its y how far left of the ends it bulges.
+    let Some(cmds) = crate::marks::arc_cmds(y0, 0.0, y1, 0.0, -1.0, hgt) else { return };
+    let right = x + hgt + RULE.curve_mid / 2.0;
+    let mut stood = cmds.clone();
+    let mut ci = 0;
+    while ci < cmds.len() {
+        let args = args_of(cmds[ci]);
+        for j in (0..args).step_by(2) {
+            stood[ci + 1 + j] = right + cmds[ci + 2 + j];
+            stood[ci + 2 + j] = cmds[ci + 1 + j];
+        }
+        ci += 1 + args;
+    }
+    pen.fill(&stood, 0.0, 0.0);
 }
 
 /// How far a whole note's tremolo strokes start from its head's middle.

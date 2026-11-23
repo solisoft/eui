@@ -749,7 +749,7 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
             }
             if ev.arpeggio {
                 // The wavy line before the chord and its accidentals.
-                let w = glyph("wiggleArpeggiatoUp").advance;
+                let w = crate::draw::arpeggio_width(ev);
                 ev.left += 0.3 + w;
                 ev.arp_x = Some(-ev.left);
             }

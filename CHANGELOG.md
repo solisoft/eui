@@ -166,6 +166,11 @@ release. A wire change lands here first, is released, and then the pin moves.
 - A score reads LilyPond 2.24's jumps, `\jump "D.S. al Coda"` and `\fine`,
   set in italics against the bar line that ends their bar; a rehearsal
   mark at the same bar line stands over them instead of through them.
+- A score draws the arpeggio's other styles (score #1026):
+  `\arpeggioBracket`, a bracket before the chord — played together, as
+  the sign says — and `\arpeggioParenthesis`, a curve like a slur's, the
+  chord rolled; `\arpeggioNormal` goes back to the wavy line. They were
+  passed over with a warning.
 
 ### Fixed
 
@@ -251,7 +256,8 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 - A chord's accidentals stand as LilyPond places them (score #1019): the
   top one nearest the heads, then the bottom one, then the second from the
-  top — the engraving books' zig-zag; notes an octave apart share a column;
+  top — the engraving books' zig-zag; notes an octave apart share a column,
+  unless that leaves one of them away from its head;
   and each sign goes as near as the ink already there lets it, 0.2 space
   clear of it, so a flat or a natural goes under the sharp over it. They
   stood in columns of whole boxes filled from the top, where two flats a

@@ -273,8 +273,10 @@ fn play(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, sounding: &mut Vec<(i64, Sounding
     // A trill, a mordent, a turn, a rolled chord: played as written out
     // (score #978). Not on a drum staff, nor with grace notes after it.
     let ornament = ORNAMENTS.into_iter().find(|n| has(n));
-    if (ornament.is_some() || ev.arpeggio) && ev.drums.is_empty() && ev.after_graces.is_empty() && !heads.is_empty() {
-        ornamented(ev_out, &heads, ornament, ev.arpeggio, t0, length, vel, channel, fifths);
+    // `\arpeggioBracket`'s chord is played together: its sign says so.
+    let rolled = ev.arpeggio && ev.arp_style != crate::parse::ArpStyle::Bracket;
+    if (ornament.is_some() || rolled) && ev.drums.is_empty() && ev.after_graces.is_empty() && !heads.is_empty() {
+        ornamented(ev_out, &heads, ornament, rolled, t0, length, vel, channel, fifths);
         return;
     }
     for &(d, alter) in &heads {
