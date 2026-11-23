@@ -576,10 +576,33 @@ fn without_duration(word: &str) -> String {
 }
 
 /// The syllables of a lyric block: each word one, `--` and `__` marking the
-/// one before them, `_` a syllable with no words.
+/// one before them, `_` a syllable with no words. `~` between two words,
+/// `e~a` or `e ~ a`, is an elision (score #1026): one syllable, the two
+/// sung on one note, drawn joined by a tie under them — kept in its text.
 fn syllables(items: &[LyricItem], at: usize) -> Result<Vec<Syllable>, ScoreError> {
     let mut out: Vec<Syllable> = Vec::new();
+    let mut join = false;
     for it in items {
+        if !it.quoted && it.s == "~" {
+            if out.last().is_none_or(|l| l.text.is_empty()) {
+                return refuse("~ joins two syllables: e~a", it.at);
+            }
+            join = true;
+            beyond();
+            continue;
+        }
+        if std::mem::take(&mut join) {
+            let skip = !it.quoted && ["--", "__", "_"].contains(&it.s.as_str());
+            if let Some(last) = out.last_mut().filter(|_| !skip) {
+                last.text.push('~');
+                last.text.push_str(&it.s);
+                continue;
+            }
+            return refuse("~ joins two syllables: e~a", it.at);
+        }
+        if it.s.contains('~') {
+            beyond();
+        }
         if !it.quoted && (it.s == "--" || it.s == "__") {
             let Some(last) = out.last_mut() else {
                 return refuse(format!("{} wants a syllable before it", it.s), it.at);
@@ -593,6 +616,9 @@ fn syllables(items: &[LyricItem], at: usize) -> Result<Vec<Syllable>, ScoreError
         }
         let skip = !it.quoted && it.s == "_";
         out.push(Syllable { text: if skip { String::new() } else { it.s.clone() }, hyphen: false, extend: false });
+    }
+    if join {
+        return refuse("~ joins two syllables: e~a", at);
     }
     if out.is_empty() {
         return refuse("\\addlyrics with no words in it", at);

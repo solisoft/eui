@@ -320,3 +320,37 @@ fn the_sostenuto_is_controller_66_and_the_soft_pedal_67() {
     let pedals: Vec<(u32, u8, u8)> = controls(&bytes).into_iter().filter(|c| c.1 == 66 || c.1 == 67).collect();
     assert_eq!(pedals, vec![(0, 66, 127), (q, 67, 127), (2 * q, 66, 0), (2 * q, 66, 127), (3 * q, 66, 0), (3 * q, 67, 0)]);
 }
+
+// ---- Lyric elisions ----------------------------------------------------------
+
+#[test]
+fn a_tilde_sings_two_syllables_on_one_note() {
+    for src in [r"{ c'4 d' e' f' } \addlyrics { Ky -- ri -- e~e son }", r"{ c'4 d' e' f' } \addlyrics { Ky -- ri -- e ~ e son }"] {
+        let p = parse(src).unwrap();
+        let sung: Vec<String> = p.staves[0].lyrics.as_ref().unwrap().iter().map(|y| y.text.clone()).collect();
+        assert_eq!(sung, ["Ky", "ri", "e~e", "son"], "{src}");
+        assert_eq!(eui_score::protocol(src), Ok(11));
+        let e = eng(src);
+        let items = items(&e);
+        assert_eq!(items[2].lyric.as_ref().unwrap().text, "e~e", "{src}: on the third note");
+        assert_eq!(items[3].lyric.as_ref().unwrap().text, "son");
+    }
+    for src in [r"{ c'4 d' } \addlyrics { ~ a b }", r"{ c'4 d' } \addlyrics { a b ~ }", r"{ c'4 d' } \addlyrics { a ~ -- b }"] {
+        let err = parse(src).err().unwrap_or_else(|| panic!("{src}: read"));
+        assert!(err.message.contains("~ joins two syllables"), "{src}: {}", err.message);
+    }
+}
+
+#[test]
+fn the_two_syllables_are_joined_by_a_tie_under_them() {
+    // The same letters, and one outline more: the tie, not a "~".
+    let (tied, _) = paths(&eng(r"{ c'2 d' } \addlyrics { e~a la }"), 8.0, 0).unwrap();
+    let (plain, _) = paths(&eng(r"{ c'2 d' } \addlyrics { ea la }"), 8.0, 0).unwrap();
+    assert_eq!(tied.len(), plain.len() + 1);
+    let curves = |all: &[Path]| all.iter().filter(|p| matches!(p, Path::Fill(c) if c.len() == 21 && c[3] == 3.0 && c[10] == 1.0 && c[13] == 3.0 && c[20] == 4.0)).count();
+    assert_eq!(curves(&tied), curves(&plain) + 1, "a tie's outline: out along one curve, back along the other");
+    // It takes room: the tie and half a space either side.
+    let wide = items(&eng(r"{ c'16 d' } \addlyrics { e~a la }"))[0].right;
+    let narrow = items(&eng(r"{ c'16 d' } \addlyrics { ea la }"))[0].right;
+    assert!(wide > narrow + 0.9, "{wide} against {narrow}");
+}

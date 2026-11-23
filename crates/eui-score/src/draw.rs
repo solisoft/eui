@@ -1081,14 +1081,14 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64, verse: usize) {
     let notes: Vec<&Ev> = line.bars.clone().flat_map(|b| bars[b].items.iter()).filter(|ev| ev.k == Kind::Note && voice_of(ev) == sung).collect();
     for (k, ev) in notes.iter().enumerate() {
         let Some(lyr) = verse_of(ev, verse) else { continue };
-        let w = if lyr.text.is_empty() { 0.0 } else { text_width(&lyr.text, Weight::Regular, e) };
+        let w = if lyr.text.is_empty() { 0.0 } else { lyric_width(&lyr.text, e) };
         // Centred on its head, or as `LyricText.self-alignment-X` says.
         let align = ev.look.num("LyricText.self-alignment-X").unwrap_or(0.0).clamp(-1.0, 1.0);
         let x0 = ev.x + (ev.head_w.unwrap_or(0.0) - w) * (align + 1.0) / 2.0;
         let x1 = x0 + w;
         if w > 0.0 {
             let from = pen.paths.len();
-            pen.text(&lyr.text, Weight::Regular, x0, y, e);
+            draw_syllable(pen, &lyr.text, x0, y, e);
             word_drawn(ev.i, "lyric", verse, from..pen.paths.len());
         }
         let mut nxt: Option<&Ev> = None;
@@ -1107,7 +1107,7 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64, verse: usize) {
         }
         if lyr.hyphen && w > 0.0 {
             let n0 = match nxt {
-                Some(nx) => nx.x + nx.head_w.unwrap_or(0.0) / 2.0 - verse_of(nx, verse).map_or(0.0, |l| text_width(&l.text, Weight::Regular, e)) / 2.0,
+                Some(nx) => nx.x + nx.head_w.unwrap_or(0.0) / 2.0 - verse_of(nx, verse).map_or(0.0, |l| lyric_width(&l.text, e)) / 2.0,
                 None => line.right,
             };
             let len = 0.66_f64.min(n0 - x1 - 0.3);
@@ -1122,6 +1122,45 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64, verse: usize) {
                 pen.rect(x1 + 0.2, y - 0.05, end_x - x1 - 0.2, 0.1);
             }
         }
+    }
+}
+
+/// How wide an elision's tie is, in a syllable set at `e`: LilyPond's
+/// `ties.lyric.default` (score #1026), which the glyph table does not hold —
+/// drawn as a tie's outline of that size instead.
+fn elision_tie_w(e: f64) -> f64 {
+    0.55 * e
+}
+
+/// How far an elision's tie hangs under the baseline, at its ends and at
+/// its lowest.
+fn elision_tie_drop(e: f64) -> (f64, f64) {
+    (0.08 * e, 0.2 * e)
+}
+
+/// A syllable's width: its words, and for each `~` in it, as LilyPond's
+/// `tied-lyric` sets it, the tie with half a word space either side.
+pub(crate) fn lyric_width(text: &str, e: f64) -> f64 {
+    let ties = text.matches('~').count() as f64;
+    let words: f64 = text.split('~').map(|part| text_width(part, Weight::Regular, e)).sum();
+    words + ties * (elision_tie_w(e) + text_width(" ", Weight::Regular, e))
+}
+
+/// A syllable at `x`: its words, and a tie under each `~` between them.
+fn draw_syllable(pen: &mut Pen, text: &str, x: f64, y: f64, e: f64) {
+    let half = text_width(" ", Weight::Regular, e) / 2.0;
+    let mut at = x;
+    for (k, part) in text.split('~').enumerate() {
+        if k > 0 {
+            let (xa, xb) = (at + half, at + half + elision_tie_w(e));
+            let (end, low) = elision_tie_drop(e);
+            if let Some(cmds) = crate::marks::arc_cmds(xa, y + end, xb, y + end, 1.0, low - end) {
+                pen.fill(&cmds, 0.0, 0.0);
+            }
+            at = xb + half;
+        }
+        pen.text(part, Weight::Regular, at, y, e);
+        at += text_width(part, Weight::Regular, e);
     }
 }
 
