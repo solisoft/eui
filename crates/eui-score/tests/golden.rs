@@ -233,7 +233,7 @@ const REWORDED: [(&str, &str); 3] = [
     ("{ c'7 }", "score: the duration 7 is not one this draws (1, 2, 4, 8, 16, 32, 64, 128) (at character 4)"),
     (
         "\\new Foo { c'4 }",
-        "score: \\new Foo is not drawn: a Staff, a ChordNames, a FiguredBass, a FretBoards, a DrumStaff, a TabStaff, a PianoStaff, a GrandStaff, a StaffGroup or a ChoirStaff is (at character 0)",
+        "score: \\new Foo is not drawn: a Staff, a ChordNames, a FiguredBass, a FretBoards, a DrumStaff, a TabStaff, a RhythmicStaff, a PianoStaff, a GrandStaff, a StaffGroup or a ChoirStaff is (at character 0)",
     ),
 ];
 

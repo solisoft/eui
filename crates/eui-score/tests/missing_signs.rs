@@ -354,3 +354,44 @@ fn the_two_syllables_are_joined_by_a_tie_under_them() {
     let narrow = items(&eng(r"{ c'16 d' } \addlyrics { ea la }"))[0].right;
     assert!(wide > narrow + 0.9, "{wide} against {narrow}");
 }
+
+// ---- RhythmicStaff -----------------------------------------------------------
+
+/// The long horizontal strokes drawn: a staff's lines.
+fn staff_lines(e: &Engraved) -> usize {
+    let (all, _) = paths(e, 8.0, 0).unwrap();
+    all.iter().filter(|p| matches!(p, Path::Rect(r) if r[2] > 100.0 && r[3] < 2.0)).count()
+}
+
+#[test]
+fn a_rhythmic_staff_is_one_line_with_every_note_on_it() {
+    let src = r"\new RhythmicStaff { \key d \major c'4 fis''8 g'' <c' e' g'>4. b8 }";
+    let p = parse(src).unwrap();
+    assert_eq!(p.staves[0].kind, eui_score::parse::StaffKind::Rhythmic);
+    assert_eq!(eui_score::protocol(src), Ok(11));
+    let e = eng(src);
+    let notes: Vec<&Ev> = items(&e);
+    assert!(notes.iter().all(|ev| ev.heads.iter().all(|h| h.pos == 0 && h.acc.is_none())), "on the line, no accidental");
+    assert!(notes.iter().all(|ev| ev.up), "stems up");
+    assert!(e.staves[0][0].beams.iter().all(|g| g.up), "beams over");
+    assert_eq!(e.staves[0][0].fifths, 0, "no key");
+    assert_eq!(e.staves[0][0].clef.sign, eui_score::parse::Sign::Rhythmic, "no clef");
+    assert_eq!(staff_lines(&e), 1);
+    assert_eq!(staff_lines(&eng(r"\new Staff { c'4 fis''8 g'' <c' e' g'>4. b8 }")), 5);
+    // No clef's room before the metre: the notes start further left.
+    let staff = eng(r"\new Staff { c'4 d' e' f' }");
+    let rhythmic = eng(r"\new RhythmicStaff { c'4 d' e' f' }");
+    assert!(items(&rhythmic)[0].x < items(&staff)[0].x - 2.0, "{} against {}", items(&rhythmic)[0].x, items(&staff)[0].x);
+    // Beside a staff of notes.
+    let both = eng(r"<< \new Staff { c''4 d'' e'' f'' } \new RhythmicStaff { c4 c8 c c2 } >>");
+    assert!(both.staves[1].iter().flat_map(|b| b.items.iter()).all(|ev| ev.heads.iter().all(|h| h.pos == 0)));
+    // A second voice's stems still go down.
+    let two = eng(r"\new RhythmicStaff << { c4 c c c } \\ { c2 c } >>");
+    assert!(two.staves[0][0].items.iter().filter(|ev| ev.k == Kind::Note).any(|ev| !ev.up));
+}
+
+#[test]
+fn a_rhythmic_staff_plays_its_notes_as_written() {
+    let all = played(r"\new RhythmicStaff { c'4 e' g'2 }");
+    assert_eq!(all.iter().map(|n| n.0).collect::<Vec<_>>(), vec![60, 64, 67]);
+}

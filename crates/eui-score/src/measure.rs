@@ -195,7 +195,7 @@ pub fn key_alters(fifths: i64) -> [i64; 7] {
 pub fn clef_mid(clef: Clef) -> i64 {
     let named = match clef.sign {
         Sign::G => 11,
-        Sign::C | Sign::Percussion | Sign::Tab => 7,
+        Sign::C | Sign::Percussion | Sign::Tab | Sign::Rhythmic => 7,
         Sign::F => 3,
     };
     named + 7 * clef.octave - clef.line

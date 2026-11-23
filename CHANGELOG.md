@@ -185,6 +185,10 @@ release. A wire change lands here first, is released, and then the pin moves.
   sung on one note, joined by a small tie under them with half a word
   space either side, as LilyPond's `tied-lyric` sets them. The tilde was
   printed as it is written.
+- A score reads `\new RhythmicStaff`, which was refused (score #1026):
+  one line, every note on it — its rhythm drawn, its pitch not — stems
+  and beams up, no clef, key or accidental; alone or beside other staves.
+  The notes are played as written.
 
 ### Fixed
 

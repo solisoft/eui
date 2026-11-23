@@ -4,7 +4,7 @@
 //! slurs" and "Expression").
 
 use crate::draw::{dot_start, past_flag, tremolo_reach};
-use crate::engrave::{barline_width, clef_glyph, rest_name, stem_x, y_of, Line};
+use crate::engrave::{barline_width, rest_name, stem_x, y_of, Line};
 use crate::glyphs::{glyph, Weight};
 use crate::measure::Bar;
 use crate::parse::{Ev, Kind, Run, StaffKind, Tempo};
@@ -631,7 +631,7 @@ pub(crate) fn marks(bars: &mut [Bar], lines: &mut [Line]) {
                 let Some(mark) = &ev.tempo else { continue };
                 let mut x = ev.x;
                 if bi == 0 && ii == 0 {
-                    x = line.left + 0.8 + glyph(clef_glyph(bars[b].clef)).advance + 1.0;
+                    x = line.left + 0.8 + crate::engrave::clef_advance(bars[b].clef) + 1.0;
                 }
                 let w = mark_width(mark);
                 let mut low: f64 = -1.0;

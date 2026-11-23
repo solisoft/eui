@@ -328,7 +328,7 @@ pub(crate) fn voice_lists(bar: &Bar) -> Vec<Vec<usize>> {
 /// Whether a staff of a kind beams its notes: a tablature shows no rhythm,
 /// and chord names have no stems.
 fn beamed(kind: StaffKind) -> bool {
-    matches!(kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Ossia)
+    matches!(kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Ossia | StaffKind::Rhythmic)
 }
 
 pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
@@ -1370,11 +1370,49 @@ pub(crate) fn clef_glyph(clef: Clef) -> &'static str {
         Sign::C => "cClef",
         Sign::Percussion => "unpitchedPercussionClef1",
         Sign::Tab => "6stringTabClef",
+        // Never drawn ([`clef_advance`]).
+        Sign::Rhythmic => "gClef",
+    }
+}
+
+/// How much room a clef's sign takes at a line's start: its glyph's
+/// advance; a rhythmic staff's none, the space after it too (score #1026).
+pub(crate) fn clef_advance(clef: Clef) -> f64 {
+    if clef.sign == Sign::Rhythmic {
+        return -1.0;
+    }
+    glyph(clef_glyph(clef)).advance
+}
+
+/// A rhythmic staff's bars (score #1026), as LilyPond's
+/// `Pitch_squash_engraver` and its RhythmicStaff draw them: every head on
+/// the line (its pitch kept, to be played), no accidental, no clef nor key
+/// at all; a stem with nothing to say which way, up (`Stem.neutral-direction`).
+fn rhythmic(bars: &mut [Bar]) {
+    let none = Clef { sign: Sign::Rhythmic, line: 0, octave: 0 };
+    for bar in bars {
+        bar.clef = none;
+        bar.fifths = 0;
+        bar.changes.clef = false;
+        bar.changes.key = false;
+        bar.changes.key_from = 0;
+        bar.inline.clear();
+        for ev in &mut bar.items {
+            ev.clef_change = None;
+            ev.key_change = None;
+            for hd in &mut ev.heads {
+                hd.pos = 0;
+                hd.acc = None;
+            }
+            if ev.k == Kind::Note && ev.voice.is_none() && ev.stem_dir == 0 {
+                ev.stem_dir = 1;
+            }
+        }
     }
 }
 
 fn prefix_width_of(o: &Opening, first: bool) -> f64 {
-    let mut w = 0.8 + glyph(clef_glyph(o.clef)).advance + 1.0;
+    let mut w = 0.8 + clef_advance(o.clef) + 1.0;
     if o.fifths != 0 {
         w += key_width(o.fifths) + 0.8;
     }
@@ -2285,6 +2323,9 @@ fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) ->
         return refuse("\\change Staff wants a second staff to go to", ev.at);
     }
     let mut bars = measures(&parsed.staves[0].events)?;
+    if kind == StaffKind::Rhythmic {
+        rhythmic(&mut bars);
+    }
     // `\crossStaff` with no staff to cross to: the note keeps its stem.
     for ev in bars.iter_mut().flat_map(|b| b.items.iter_mut()) {
         ev.span_stem = false;
@@ -2482,6 +2523,11 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
         all.push(measures(&stf.events)?);
         sources.push(stf.events.as_slice().into());
     }
+    for (stf, bars) in staves_src.iter().zip(all.iter_mut()) {
+        if stf.kind == StaffKind::Rhythmic {
+            rhythmic(bars);
+        }
+    }
     // Bars of rest gathered in one staff and not in another: gathered only
     // where every staff rests the same bars.
     if all.iter().any(|bars| bars.iter().any(|b| b.span.is_some())) {
@@ -2594,7 +2640,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
         let mut key_w: f64 = 0.0;
         for bars in &all {
             let first = &bars[range.start];
-            clef_w = clef_w.max(glyph(clef_glyph(first.clef)).advance);
+            clef_w = clef_w.max(clef_advance(first.clef));
             key_w = key_w.max(if first.fifths == 0 { 0.0 } else { key_width(first.fifths) });
         }
         for ss in &mut staff_lines {
@@ -2811,7 +2857,7 @@ fn removed(staves: &[crate::parse::Staff], all: &[Vec<Bar>], range: &Range<usize
         .iter()
         .enumerate()
         .map(|(s, stf)| {
-            if !matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab) {
+            if !matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab | StaffKind::Rhythmic) {
                 return false;
             }
             let look = stf.events.iter().find(|ev| !ev.look.is_empty()).map(|ev| ev.look.clone()).unwrap_or_default();
@@ -2821,7 +2867,7 @@ fn removed(staves: &[crate::parse::Staff], all: &[Vec<Bar>], range: &Range<usize
             range.clone().all(|b| all[s][b].items.iter().all(|ev| ev.k != Kind::Note))
         })
         .collect();
-    let kept = staves.iter().enumerate().any(|(s, stf)| !out[s] && matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab));
+    let kept = staves.iter().enumerate().any(|(s, stf)| !out[s] && matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab | StaffKind::Rhythmic));
     if !kept {
         out = vec![false; staves.len()];
     }

@@ -805,6 +805,8 @@ pub enum Sign {
     Percussion,
     /// A tablature's "TAB".
     Tab,
+    /// A rhythmic staff's: none drawn, and no room for one.
+    Rhythmic,
 }
 
 /// A clef: its sign, the line it is on, and the octaves it moves the music.
@@ -1417,6 +1419,9 @@ pub enum StaffKind {
     Drums,
     /// `\new TabStaff`: a guitar's six strings, and frets on them.
     Tab,
+    /// `\new RhythmicStaff` (score #1026): one line, every note on it — its
+    /// rhythm drawn, its pitch not — and no clef nor key; played as written.
+    Rhythmic,
 }
 
 /// How a note's words are read: `\chordmode`, `\drummode`, or as notes.
@@ -2949,6 +2954,7 @@ fn staff_kind(kind: &str) -> Option<StaffKind> {
         "FretBoards" => StaffKind::FretBoards,
         "DrumStaff" => StaffKind::Drums,
         "TabStaff" => StaffKind::Tab,
+        "RhythmicStaff" => StaffKind::Rhythmic,
         _ => return None,
     })
 }
@@ -3024,7 +3030,7 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
         }
         if staff_kind(&kind).is_none() && group_kind(&kind).is_none() {
             return refuse(
-                format!("\\new {kind} is not drawn: a Staff, a ChordNames, a FiguredBass, a FretBoards, a DrumStaff, a TabStaff, a PianoStaff, a GrandStaff, a StaffGroup or a ChoirStaff is"),
+                format!("\\new {kind} is not drawn: a Staff, a ChordNames, a FiguredBass, a FretBoards, a DrumStaff, a TabStaff, a RhythmicStaff, a PianoStaff, a GrandStaff, a StaffGroup or a ChoirStaff is"),
                 tk.at,
             );
         }
@@ -3394,6 +3400,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
     match kind {
         StaffKind::Drums => st.events.push(Ev { k: Kind::Clef, clef: Clef { sign: Sign::Percussion, line: 0, octave: 0 }, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() }),
         StaffKind::Tab => st.events.push(Ev { k: Kind::Clef, clef: Clef { sign: Sign::Tab, line: 0, octave: 0 }, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() }),
+        StaffKind::Rhythmic => st.events.push(Ev { k: Kind::Clef, clef: Clef { sign: Sign::Rhythmic, line: 0, octave: 0 }, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() }),
         _ => {}
     }
     if wraps(toks, i) {

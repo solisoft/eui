@@ -1014,6 +1014,7 @@ pub(crate) fn settle(staves: &mut [crate::parse::Staff], groups: &[crate::parse:
         names.push(match stf.kind {
             StaffKind::Drums => "DrumStaff",
             StaffKind::Tab => "TabStaff",
+            StaffKind::Rhythmic => "RhythmicStaff",
             StaffKind::ChordNames => "ChordNames",
             _ => "Staff",
         });
@@ -1054,7 +1055,7 @@ pub(crate) fn settle(staves: &mut [crate::parse::Staff], groups: &[crate::parse:
         let timed = stf.events[..first_note].iter().any(|e| e.k == Kind::Time);
         let look = stf.events.get(first_note).map(|e| e.look.clone()).unwrap_or_else(|| plain.clone());
         let parts = time_style(&look);
-        if !timed && parts != 0 && matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Ossia) {
+        if !timed && parts != 0 && matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Ossia | StaffKind::Rhythmic) {
             let mut t = Ev { k: Kind::Time, time: (4, 4), look, v: crate::parse::DEFAULT_METRE.into(), at: stf.events.first().map_or(0, |e| e.at), ..Ev::default() };
             t.time_parts[3] = parts;
             stf.events.insert(0, t);

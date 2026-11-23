@@ -782,6 +782,9 @@ fn head_glyph(base: i64, style: &str) -> &'static str {
 /// two: in italic, small, centred under its foot or over its head, as
 /// LilyPond's `ClefModifier` sets it.
 fn draw_clef(pen: &mut Pen, clef: Clef, x: f64, top: f64) {
+    if clef.sign == Sign::Rhythmic {
+        return;
+    }
     draw_clef_as(pen, clef, clef_glyph(clef), x, top);
 }
 
@@ -846,6 +849,9 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     let look = first.items.first().map(|ev| ev.look.clone()).unwrap_or_default();
     if tab {
         draw_strings(&mut pen, bars, line, top);
+    } else if line.kind == StaffKind::Rhythmic && !look.omitted("StaffSymbol") {
+        // One line, the middle one (score #1026).
+        pen.rect(left, top + 2.0 - RULE.staff / 2.0, right - left, RULE.staff);
     } else if !look.omitted("StaffSymbol") {
         for i in 0..5 {
             pen.rect(left, top + i as f64 - RULE.staff / 2.0, right - left, RULE.staff);
@@ -859,11 +865,10 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         pen.text(&number, Weight::Regular, number_x, top - 1.6, e);
     }
     let mut x = left + 0.8;
-    let clef = clef_glyph(first.clef);
     if !look.omitted("Clef") {
         draw_clef(&mut pen, first.clef, x, top);
     }
-    x += line.clef_w.unwrap_or(glyph(clef).advance) + 1.0;
+    x += line.clef_w.unwrap_or(crate::engrave::clef_advance(first.clef)) + 1.0;
     let keyed = !look.omitted("KeySignature");
     if tab {
         // A tablature's frets say what a key and a metre would.
