@@ -769,6 +769,11 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 right += glyph(&flag_name(ev.base, true)).advance * k - RULE.stem;
             }
             ev.right = right;
+            // Room for the beams between two whole notes of `\repeat
+            // tremolo`: 0.4 space either side of two spaces of beam.
+            if ev.trem_first && ev.base == 1 {
+                ev.right = ev.right.max(hw + 2.8);
+            }
             if ev.lv {
                 ev.right = ev.right.max(hw + 0.15 + marks::SHORT_TIE + 0.2);
             }
@@ -1976,6 +1981,18 @@ fn beam(bar: &mut Bar, gi: usize, placed: &[bool]) {
     if let Some((l, r)) = look.pair("Beam.positions") {
         q_left = outer(l);
         q_right = outer(r);
+    }
+    // Between two whole notes of `\repeat tremolo`, which have no stems,
+    // the beams stand between the heads, their stack centred on the line
+    // from one chord's middle to the other's (score #1026).
+    if let [a, b] = notes[..] {
+        let (ea, eb) = (&bar.items[a], &bar.items[b]);
+        if ea.trem_beams > 0 && ea.base == 1 && eb.base == 1 {
+            let middle = |ev: &Ev| (y_of(ev.heads.first().map_or(0, |h| h.pos)) + y_of(ev.heads.last().map_or(0, |h| h.pos))) / 2.0;
+            let half = (thick + (n_beams - 1) as f64 * step) / 2.0;
+            q_left = middle(ea) - dir * half;
+            q_right = middle(eb) - dir * half;
+        }
     }
     let x0 = stem_x(&bar.items[notes[0]]);
     let x1 = stem_x(&bar.items[notes[notes.len() - 1]]);

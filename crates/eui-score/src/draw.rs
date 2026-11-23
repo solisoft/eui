@@ -1808,21 +1808,16 @@ fn draw_beam(pen: &mut Pen, bar: &Bar, g: &Beam, top: f64) {
     }
 }
 
-/// How far a two-note tremolo's beams keep from the stems, as LilyPond's
-/// `Beam.gap`: under `\repeat tremolo`, a half note's beams stop short of
-/// its stems — only a beam its value has reaches them — and a whole note's,
-/// which has none, go from head to head (score #1026). Where the beam at
-/// `level` between `a` and `b` starts and ends, or none for a beam drawn
-/// to the stems.
+/// Where a two-note tremolo's beam at `level` between `a` and `b` starts
+/// and ends when it is not drawn to stems (score #1026): between whole
+/// notes, which have none, from 0.4 space past the first head to 0.4
+/// space before the second. None between notes with stems.
 fn tremolo_gap(a: &Ev, b: &Ev, level: i64) -> Option<(f64, f64)> {
-    const GAP: f64 = 0.8;
-    if a.trem_beams == 0 || b.trem_beams == 0 || a.base > 2 || level < flags(a.base) {
+    const GAP: f64 = 0.4;
+    if a.trem_beams == 0 || b.trem_beams == 0 || a.base > 1 || level < flags(a.base) {
         return None;
     }
-    if a.base == 1 {
-        return Some((a.x + a.head_w.unwrap_or(0.0) + GAP / 2.0, b.x - GAP / 2.0));
-    }
-    Some((stem_x(a) + GAP, stem_x(b) - GAP))
+    Some((a.x + a.head_w.unwrap_or(0.0) + GAP, b.x - GAP))
 }
 
 /// The percent sign of a bar `\repeat percent` copies, in the middle of

@@ -174,8 +174,9 @@ release. A wire change lands here first, is released, and then the pin moves.
 - A score reads two-note tremolos, `\repeat tremolo 8 { c16 e }`, which
   were refused (score #1026): each note drawn as long as the whole tremolo
   — two whole notes there, two halves for `\repeat tremolo 4` — the written
-  value's beams between them, short of a half note's stems, and the two
-  notes played in turn in sixteenths. `\repeat tremolo 4 c16`, one note,
+  value's beams between them — to the stems, or between whole notes'
+  heads, along the line from one to the other — and the two notes played
+  in turn in sixteenths. `\repeat tremolo 4 c16`, one note,
   is `c4:16`.
 - A score reads the other two piano pedals, which were refused (score
   #1026): `\sostenutoOn` and `\sostenutoOff`, "Sost. Ped." and "*", and

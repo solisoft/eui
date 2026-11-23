@@ -334,19 +334,21 @@ fn the_two_notes_are_beamed_together_with_the_written_beams() {
         assert_eq!((bar.beams[0].notes.len(), bar.beams[0].n), (2, n), "{src}");
         assert!(bar.items[0].up == bar.items[1].up, "{src}: one direction");
     }
-    // Between halves the beams stop short of the stems, 0.8 space from
-    // each (LilyPond's Beam.gap); between quarters they reach them.
-    for (src, short) in [(r"{ \repeat tremolo 4 { c''16 a' } r2 }", true), (r"{ \repeat tremolo 2 { c''16 a' } r2. }", false)] {
+    // Between halves and quarters the beams reach the stems; between whole
+    // notes, which have none, they stand between the heads, short of both.
+    for (src, to_stems) in [(r"{ \repeat tremolo 4 { c''16 a' } r2 }", true), (r"{ \repeat tremolo 2 { c''16 a' } r2. }", true), (r"{ \repeat tremolo 8 { c''16 a' } }", false)] {
         let e = eng(src);
         let g = &e.staves[0][0].beams[0];
         let strokes = beam_strokes(&e);
         assert_eq!(strokes.len(), 2, "{src}");
         for w in strokes {
             let between = (g.x1 - g.x0) * 8.0;
-            if short {
-                assert!((w - (between - 1.6 * 8.0)).abs() < 0.5, "{src}: {w} against {between}");
-            } else {
+            if to_stems {
                 assert!(w > between, "{src}: {w} against {between}");
+            } else {
+                let items = items(&e);
+                let room = (items[1].x - items[0].x - items[0].head_w.unwrap()) * 8.0;
+                assert!((w - (room - 0.8 * 8.0)).abs() < 0.5, "{src}: {w} against {room}");
             }
         }
     }
@@ -359,6 +361,39 @@ fn the_two_notes_are_beamed_together_with_the_written_beams() {
     let e = eng(r"{ r2.. \repeat tremolo 4 { c''16 a' } c''8 d'' r2 }");
     assert!(e.staves[0].iter().all(|b| b.beams.iter().all(|g| g.notes.iter().all(|&j| b.items[j].trem_beams == 0))), "no tremolo beam");
     played(r"{ r2.. \repeat tremolo 4 { c''16 a' } c''8 d'' r2 }");
+}
+
+#[test]
+fn the_beams_stand_by_the_heads() {
+    // Whole notes: the stack of beams centred on the line from one head to
+    // the other, within a space of it at either end.
+    for src in [r"{ \repeat tremolo 8 { c'16 e' } }", r"{ \repeat tremolo 8 { c''16 a' } }", r"{ \repeat tremolo 8 { <c' e'>16 <a' c''> } }"] {
+        let e = eng(src);
+        let bar = &e.staves[0][0];
+        let g = &bar.beams[0];
+        let middle = |ev: &Ev| ev.heads.iter().map(|h| 2.0 - h.pos as f64 / 2.0).sum::<f64>() / ev.heads.len() as f64;
+        let (a, b) = (&bar.items[g.notes[0]], &bar.items[g.notes[1]]);
+        let stack = 0.48 + (g.n - 1) as f64 * 0.75;
+        let dir = if g.up { 1.0 } else { -1.0 };
+        for (edge, ev) in [(g.y0, a), (g.y1, b)] {
+            let centre = edge + dir * stack / 2.0;
+            assert!((centre - middle(ev)).abs() < 1.0, "{src}: the beams' middle {centre} against the heads' {}", middle(ev));
+        }
+    }
+    // Halves, a chord's included: the beams at the stems' ends, a normal
+    // stem's length from the heads they start from — not floating apart.
+    for src in [r"{ \repeat tremolo 4 { c''16 a' } r2 }", r"{ \repeat tremolo 4 { <c'' e''>16 <a' d''> } r2 }", r"{ \repeat tremolo 4 { g'16 c'' } r2 }"] {
+        let e = eng(src);
+        let bar = &e.staves[0][0];
+        let g = &bar.beams[0];
+        for (edge, j) in [(g.y0, g.notes[0]), (g.y1, g.notes[1])] {
+            let ev = &bar.items[j];
+            assert!((ev.stem_end - edge).abs() < 1e-9, "{src}: the stem reaches the beam");
+            let near = if g.up { ev.heads.last() } else { ev.heads.first() }.map(|h| 2.0 - h.pos as f64 / 2.0).unwrap();
+            let length = (edge - near).abs();
+            assert!((2.5..=4.5).contains(&length), "{src}: {length} spaces from the head");
+        }
+    }
 }
 
 #[test]
