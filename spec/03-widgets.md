@@ -626,11 +626,17 @@ construct as LilyPond 2.25 draws it:
   does not draw (`\epsfile`) is passed over with a warning and its words
   kept; `\stopStaff` and `\startStaff` are passed over with a warning,
   as are lyrics sung to a voice nobody named.
+  A `\markup` after the last score — a song's verses — is set under the
+  last system: each item of a `\column` a line, at the left, three staff
+  spaces from baseline to baseline, a line the page has no room for on
+  the next; its fonts, sizes and spaces are not read, and one before the
+  music or between two scores is passed over with a warning.
 
 - *Real files* (score #359): layout settings — `\override`, `\revert`,
   `\once`, `\tweak`, `\set`, `\unset`, the direction and style switches,
-  a context's `\with`, `\layout`, `\midi` and `\paper` settings, top-level `\markup`, `\include` and unprinted header fields —
-  read whole and passed over, each reported as a warning
+  a context's `\with`, `\layout`, `\midi` and `\paper` settings, a
+  `\markup` before or between the scores, `\include` and unprinted header
+  fields — read whole and passed over, each reported as a warning
   (`eui_score::warnings(src)`); `\stemUp`/`\stemDown`/`\stemNeutral` and
   `\autoBeamOff`/`\autoBeamOn` honoured; `\breathe`, `\caesura`,
   `\upbow`, `\downbow`, `\flageolet`, `\espressivo`, `\laissezVibrer`,

@@ -185,6 +185,10 @@ fn lowered(mut eng: Engraved, dy: f64) -> Engraved {
             line.bottom += dy;
         }
     }
+    // The words after the music, with it.
+    for words in &mut eng.after {
+        words.y += dy;
+    }
     eng.height += dy;
     eng
 }

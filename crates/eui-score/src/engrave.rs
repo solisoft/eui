@@ -246,6 +246,59 @@ pub struct Engraved {
     pub groups: Vec<Group>,
     /// The room a page's header takes over the titles (`Layout::head_room`).
     pub head_room: f64,
+    /// The words written after the music (score #1031), a line each, where
+    /// each is set.
+    pub after: Vec<AfterWords>,
+}
+
+/// A line of the words after the music.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AfterWords {
+    /// The line.
+    pub text: String,
+    /// Where it starts.
+    pub x: f64,
+    /// Its baseline, from the top of its page.
+    pub y: f64,
+    /// The page it is on.
+    pub page: usize,
+}
+
+/// The size of the words after the music: the text's own.
+pub(crate) fn after_em() -> f64 {
+    em(0.0)
+}
+
+/// From one baseline of the words after the music to the next: LilyPond's
+/// `baseline-skip`, three staff spaces.
+const AFTER_STEP: f64 = 3.0;
+
+/// The words after the music (`Parsed::after_words`), set under the last
+/// system, a line every [`AFTER_STEP`]: on a screen the score is that much
+/// taller; on paper a line the page has no room for starts the next page.
+fn place_after(eng: &mut Engraved, parsed: &Parsed, layout: &Layout) {
+    if parsed.after_words.is_empty() {
+        return;
+    }
+    let mut page = eng.pages.len().saturating_sub(1);
+    let bottom = eng.systems.iter().filter(|s| s.page == page).map(|s| s.bottom).fold(0.0, f64::max);
+    let floor = layout.page_h.map(|h| h - layout.bottom.unwrap_or(0.0));
+    let head = layout.top.unwrap_or(0.0) + AFTER_STEP;
+    let mut y = bottom + 2.0 + AFTER_STEP;
+    for text in &parsed.after_words {
+        if floor.is_some_and(|f| y > f && y > head) {
+            page += 1;
+            eng.pages.push(Page { index: page, systems: Vec::new() });
+            y = head;
+        }
+        if !text.is_empty() {
+            eng.after.push(AfterWords { text: text.clone(), x: eng.left, y, page });
+        }
+        y += AFTER_STEP;
+    }
+    if layout.page_h.is_none() {
+        eng.height = eng.height.max(y - AFTER_STEP + 1.5);
+    }
 }
 
 pub(crate) fn y_of(pos: i64) -> f64 {
@@ -2358,12 +2411,14 @@ fn system_reach(sys: &System, staves: &[Vec<Bar>]) -> (f64, f64) {
 
 pub(crate) fn engrave_parsed(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved, ScoreError> {
     let opts = Opts::of(layout, &parsed.paper);
-    crate::breaking::with_durations(&parsed.spacing, || {
+    let mut eng = crate::breaking::with_durations(&parsed.spacing, || {
         if parsed.staves.len() > 1 {
             return engrave_many(parsed, width, layout, &opts);
         }
         engrave_one(parsed, width, layout, &opts)
-    })
+    })?;
+    place_after(&mut eng, parsed, layout);
+    Ok(eng)
 }
 
 fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) -> Result<Engraved, ScoreError> {
@@ -2428,6 +2483,7 @@ fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) ->
         numbered: layout.page_h.is_some() && layout.top.is_some(),
         groups: Vec::new(),
         head_room: layout.head_room,
+        after: Vec::new(),
     })
 }
 
@@ -2740,6 +2796,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
         numbered: layout.page_h.is_some() && layout.top.is_some(),
         groups: parsed.groups.clone(),
         head_room: layout.head_room,
+        after: Vec::new(),
     })
 }
 

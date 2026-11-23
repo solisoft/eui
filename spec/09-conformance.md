@@ -1126,7 +1126,9 @@ version 7) and a margin.
   voice holds its lyrics, a variable in their braces
   (`a_voice_holds_its_lyrics_and_lyricsto_takes_a_variable_in_braces`);
   markup not drawn keeps its words
-  (`markup_this_does_not_draw_keeps_its_words`); a duration alone repeats
+  (`markup_this_does_not_draw_keeps_its_words`); the words after the
+  music are set under it, in the last band and on the pages they need
+  (`words_after_the_music_are_set_under_it`); a duration alone repeats
   the note (`a_duration_alone_repeats_the_note_before_it`); `\xNote` and
   `\harmonicNote` change heads only
   (`x_notes_and_harmonic_notes_change_their_heads_only`); a shorter staff

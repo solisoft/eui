@@ -432,7 +432,17 @@ pub fn page_paths_heads(eng: &Engraved, sp: f64, page: usize, ranges: &mut Range
             draw_system_heads(&mut paths, eng, sys, sys.top, sp, ranges, heads.as_deref_mut());
         }
     }
+    draw_after(&mut paths, eng, sp, page, 0.0);
     paths
+}
+
+/// The words written after the music on page `page` (score #1031), `up`
+/// staff spaces higher than the page has them: in a band's own frame.
+fn draw_after(paths: &mut Vec<Path>, eng: &Engraved, sp: f64, page: usize, up: f64) {
+    let mut pen = Pen { paths, sp, heads: None, scale: None };
+    for w in eng.after.iter().filter(|w| w.page == page) {
+        pen.text(&w.text, Weight::Regular, w.x, w.y - up, crate::engrave::after_em());
+    }
 }
 
 /// One canvas of a page: the titles (or the page number), or a system.
@@ -489,6 +499,8 @@ pub fn bands(eng: &Engraved, sp: f64, page: usize, total: i64) -> Vec<Band> {
     }
     if let Some(last) = out.last_mut() {
         last.h = (total - last.y).max(0);
+        // The words after the music, in the band they fall under.
+        draw_after(&mut last.paths, eng, sp, page, last.y as f64 / sp);
     }
     out
 }
@@ -646,6 +658,7 @@ pub fn print_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
             draw_system(&mut paths, eng, sys, sys.top, sp, &mut Vec::new());
         }
     }
+    draw_after(&mut paths, eng, sp, page, 0.0);
     paths
 }
 

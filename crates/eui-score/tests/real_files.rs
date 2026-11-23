@@ -87,9 +87,28 @@ fn le_grand_cerf_opens_as_it_is() {
             "\\override LyricText.font-size in \\layout is not drawn",
             "\\override LyricText.minimum-Y-extent in \\layout is not drawn",
             "\\stopStaff is not drawn",
-            "\\markup outside the music is not drawn",
+            "\\epsfile: a picture in a \\markup is not drawn",
         ]
     );
+    // The song's words, written in a \markup after the score: under the music.
+    assert_eq!(
+        p.after_words,
+        [
+            "Dans sa maison un grand cerf",
+            "regardait par la fenêtre",
+            "un lapin venir a lui",
+            "et frapper ainsi.",
+            "",
+            "Cerf, cerf,",
+            "ouvre moi !",
+            "ou le chasseur me tuera !",
+            "Lapin lapin",
+            "entre et viens,",
+            "me serrer la main."
+        ]
+    );
+    let (paged, _) = engrave_paper(&real("grand-cerf")).unwrap();
+    assert_eq!((paged.pages.len(), paged.after.len()), (1, 10));
 }
 
 #[test]
@@ -160,7 +179,13 @@ fn a_context_is_named_by_a_bare_word_and_a_voice_makes_its_staff() {
     assert_eq!(said(src), vec!["\\stopStaff is not drawn"]);
     engrave(src, 100.0, &Layout::default()).unwrap();
     // None of it is the catalogue's subset: an older client is sent paths.
-    for src in ["\\new Staff << \\context Voice = V { c'4 } >>", "{ c'4 4 }", "{ \\xNote c'4 }", "\\new TabStaff \\with { stringTunings = #bass-tuning } { e,,4 }", "<< \\new Staff { c'1 } \\new Staff { c1 c1 } >>"] {
+    for src in [
+        "\\new Staff << \\context Voice = V { c'4 } >>",
+        "{ c'4 4 }",
+        "{ \\xNote c'4 }",
+        "\\new TabStaff \\with { stringTunings = #bass-tuning } { e,,4 }",
+        "<< \\new Staff { c'1 } \\new Staff { c1 c1 } >>",
+    ] {
         assert_eq!(eui_score::protocol(src), Ok(11), "{src}");
     }
 }
@@ -193,9 +218,52 @@ fn markup_this_does_not_draw_keeps_its_words() {
     let over: Vec<&str> = p.staves[0].events[0].texts.iter().flat_map(|w| w.runs.iter().map(|r| r.text.as_str())).collect();
     assert_eq!(over, vec!["dolce", "e"]);
     assert_eq!(said(src), vec!["\\typewriter is not markup this draws", "\\epsfile: a picture in a \\markup is not drawn"]);
-    // A \markup after the score, in a \book: passed over, the music read.
-    let book = "\\book { \\score { { c'1 } \\layout {} } \\markup { \\vspace #1 \\hspace #10 \\column { \"one\" \"two\" } \\column { \" \" { \\hspace #5 \\epsfile #X #10 #\"l.eps\" } } } }";
-    assert_eq!(said(book), vec!["\\markup outside the music is not drawn"]);
+}
+
+#[test]
+fn words_after_the_music_are_set_under_it() {
+    use eui_score::bands;
+    let plain = "\\book { \\score { { c'1 } \\layout {} } }";
+    let book = "\\book { \\score { { c'1 } \\layout {} } \\markup { \\vspace #1 \\hspace #10 \\override #'(font-name . \"x\") \\fontsize #-1 \\column { \"one two\" \"    \" \"three\" } \\column { \" \" { \\hspace #5 \\epsfile #X #10 #\"l.eps\" } } } }";
+    // A column's items a line each, a line of spaces an empty one; the picture said.
+    assert_eq!(read(book).after_words, ["one two", "", "three"]);
+    assert_eq!(said(book), vec!["\\epsfile: a picture in a \\markup is not drawn"]);
+    // On a screen: under the last system, the score that much taller.
+    let (with, without) = (engrave(book, 100.0, &Layout::default()).unwrap(), engrave(plain, 100.0, &Layout::default()).unwrap());
+    let lines: Vec<(&str, f64)> = with.after.iter().map(|w| (w.text.as_str(), w.y)).collect();
+    assert_eq!(lines.iter().map(|l| l.0).collect::<Vec<_>>(), ["one two", "three"]);
+    assert!(lines[0].1 > with.systems[0].bottom && lines[1].1 == lines[0].1 + 6.0, "{lines:?}");
+    assert!(with.height > without.height + 6.0 && with.height > lines[1].1);
+    assert!(without.after.is_empty());
+    let (drawn, bare) = (paths(&with, 8.0, 0).unwrap().0, paths(&without, 8.0, 0).unwrap().0);
+    assert!(drawn.len() > bare.len());
+    assert_eq!(drawn[..bare.len()], bare[..], "the music is where it was");
+    // In the bands, the last one's, which reaches the foot.
+    let total = (with.height * 8.0).ceil() as i64;
+    let cut = bands(&with, 8.0, 0, total).unwrap();
+    assert_eq!(cut.iter().map(|b| b.h).sum::<i64>(), total);
+    let all: usize = cut.iter().map(|b| b.paths.len()).sum();
+    let all_bare: usize = bands(&without, 8.0, 0, (without.height * 8.0).ceil() as i64).unwrap().iter().map(|b| b.paths.len()).sum();
+    assert_eq!(all - all_bare, drawn.len() - bare.len());
+    // On paper: on the last page where there is room, on pages of their own past it.
+    let (paged, _) = engrave_paper(book).unwrap();
+    assert_eq!((paged.pages.len(), paged.after.iter().filter(|w| w.page == 0).count()), (1, 2));
+    let long = format!("{{ c'1 }} \\markup {{ \\column {{ {} }} }}", "\"la la la\" ".repeat(150));
+    let (paged, _) = engrave_paper(&long).unwrap();
+    assert!(paged.pages.len() >= 2 && paged.after.len() == 150);
+    assert!(paged.after.iter().any(|w| w.page == paged.pages.len() - 1));
+    for page in 0..paged.pages.len() {
+        paths(&paged, 5.0, page).unwrap();
+    }
+    assert!(pdf(&long, "t").unwrap().starts_with("%PDF"));
+    // Words on one line, and two blocks, an empty line between them.
+    assert_eq!(read("{ c'1 } \\markup \\bold \"Fin\"").after_words, ["Fin"]);
+    assert_eq!(read("{ c'1 } \\markup { one \\italic two } \\markup { \\line { three four } }").after_words, ["one two", "", "three four"]);
+    // Before the music, or between two scores, they are still passed over.
+    for src in ["\\markup { \"Preface\" } { c'1 }", "\\score { { c'1 } } \\markup { \"Interlude\" } \\score { { d'1 } }"] {
+        assert!(read(src).after_words.is_empty(), "{src}");
+        assert_eq!(said(src), vec!["\\markup outside the music is not drawn"], "{src}");
+    }
 }
 
 #[test]

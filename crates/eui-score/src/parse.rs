@@ -1704,6 +1704,10 @@ pub struct Parsed {
     pub spacing: SpacingSpanner,
     /// What the music writes out: what layout has to draw (score #540).
     pub written: crate::written::Written,
+    /// The words of the `\markup` blocks written after the music — a song's
+    /// verses under its tune (score #1031) — a line each, an empty one
+    /// between two blocks: set under the last system.
+    pub after_words: Vec<String>,
 }
 
 /// The page a source asks for: `\paper { #(set-paper-size "letter")
@@ -1924,6 +1928,9 @@ struct Base {
     /// The header being read belongs to a movement after the first, not to
     /// the piece: its `piece` and `opus` are the movement's title.
     local: Option<HashMap<String, String>>,
+    /// The `\markup` blocks read outside the music: the notes read before
+    /// each, where it starts, and its lines.
+    words: Vec<(usize, usize, Vec<String>)>,
 }
 
 struct St {
@@ -2512,8 +2519,18 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     DEPTH.with(|d| d.set(0));
     let toks = expand(tokens(src)?)?;
     scan_beyond(&toks);
-    let mut st =
-        Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new(), quotes: std::rc::Rc::default(), compress: 0, local: None };
+    let mut st = Base {
+        header: HashMap::new(),
+        paper: PaperSpec::default(),
+        counter: 0,
+        notes: 0,
+        lang: Lang::default(),
+        pending: Vec::new(),
+        quotes: std::rc::Rc::default(),
+        compress: 0,
+        local: None,
+        words: Vec::new(),
+    };
     // The file's scores, one after another: `\score { … }` blocks, music
     // written without one, inside `\book { }` and `\bookpart { }`.
     let mut movements: Vec<Movement> = Vec::new();
@@ -2598,7 +2615,19 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
             }
         }
     }
-    let mut parsed = Parsed { header: st.header, paper: st.paper, staves, groups, warnings: Vec::new(), spacing: SpacingSpanner::default(), written: crate::written::Written::default() };
+    // The words after the last score go under it; between two scores they are not set.
+    let mut after_words: Vec<String> = Vec::new();
+    for (notes, at, lines) in std::mem::take(&mut st.words) {
+        if notes < st.notes || lines.is_empty() {
+            warn("\\markup outside the music is not drawn", at);
+            continue;
+        }
+        if !after_words.is_empty() {
+            after_words.push(String::new());
+        }
+        after_words.extend(lines);
+    }
+    let mut parsed = Parsed { header: st.header, paper: st.paper, staves, groups, warnings: Vec::new(), spacing: SpacingSpanner::default(), written: crate::written::Written::default(), after_words };
     // What layout gets, counted whole: each staff as long as the longest.
     parsed.written = crate::written::finished(&parsed);
     parsed.written.within(parsed.staves.first().and_then(|s| s.events.first()).map_or(0, |e| e.at))?;
@@ -2707,8 +2736,15 @@ fn preamble(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreErr
                 i = layout_block(toks, i, &mut st.paper)?;
             }
             "markup" | "markuplist" => {
-                // Words between the scores — a title page, a dedication: not set.
+                // Words outside the scores: after the music, set under it
+                // (`parse` says which); a title page before it is not.
                 beyond();
+                if t.v == "markup" && st.notes > 0 {
+                    let (lines, j) = words_lines(toks, i + 1, t.at)?;
+                    st.words.push((st.notes, t.at, lines));
+                    i = j;
+                    continue;
+                }
                 warn(format!("\\{} outside the music is not drawn", t.v), t.at);
                 i = markup_skip(toks, i + 1)?;
             }
@@ -6485,6 +6521,97 @@ fn markup_item(toks: &[Tok], i: usize, weight: Weight, runs: &mut Vec<Run>, at: 
             }
         },
         _ => refuse(format!("'{}' is not markup this draws", t.v), t.at),
+    }
+}
+
+// ---- Words after the music ---------------------------------------------------------
+//
+// A `\markup` written after the score (score #1031): a song's verses under
+// its tune. Its lines are read — each item of a `\column` a line, what is
+// written side by side one line — and set under the last system, at the
+// left, in the text face; sizes, fonts, spaces and a second column beside
+// the first are not: the second's lines follow the first's.
+
+/// The lines of the markup at `i`, just after `\markup`, and the token
+/// after it. Lines of spaces are empty; the empty ones at the end are left out.
+fn words_lines(toks: &[Tok], i: usize, at: usize) -> Result<(Vec<String>, usize), ScoreError> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let j = words_item(toks, i, &mut lines, &mut line, at)?;
+    lines.push(line);
+    let mut lines: Vec<String> = lines.into_iter().map(|l| l.trim_end().to_owned()).collect();
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    crate::written::spend_text(lines.iter().map(|l| crate::written::chars(l)).sum(), at)?;
+    Ok((lines, j))
+}
+
+/// One item of such a markup: onto `line`, or — a column's items — each a
+/// line of `lines`.
+fn words_item(toks: &[Tok], i: usize, lines: &mut Vec<String>, line: &mut String, at: usize) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
+    let Some(t) = toks.get(i) else { return refuse("a \\markup that is never finished", at) };
+    let plain = |runs: &[Run]| runs.iter().filter(|r| !r.glyph && !r.text.starts_with(crate::frets::FRET)).map(|r| r.text.as_str()).collect::<Vec<_>>().join(" ");
+    match t.t {
+        T::Sym('{') => {
+            let mut j = i + 1;
+            while j < toks.len() && toks[j].t != T::Sym('}') {
+                j = words_item(toks, j, lines, line, at)?;
+            }
+            if j >= toks.len() {
+                return refuse("a \\markup { that is never closed", at);
+            }
+            Ok(j + 1)
+        }
+        T::Cmd if ["column", "center-column", "left-column", "right-column", "dir-column"].contains(&t.v.as_str()) && is(toks, i + 1, T::Sym('{')) => {
+            if !line.trim().is_empty() {
+                lines.push(std::mem::take(line));
+            }
+            let mut j = i + 2;
+            while j < toks.len() && toks[j].t != T::Sym('}') {
+                let mut runs = Vec::new();
+                j = markup_item(toks, j, Weight::Regular, &mut runs, at)?;
+                lines.push(plain(&runs));
+            }
+            if j >= toks.len() {
+                return refuse("a \\markup { that is never closed", at);
+            }
+            Ok(j + 1)
+        }
+        T::Cmd
+            if matches!(t.v.as_str(), "column" | "line" | "concat" | "fill-line" | "center-align" | "left-align" | "right-align" | "override" | "fontsize" | "abs-fontsize" | "hspace" | "vspace")
+                || matches!(toks.get(i + 1).map(|n| n.t), Some(T::Sym('#'))) =>
+        {
+            // A command that styles or spaces what follows: its Scheme
+            // arguments passed over, the item after it read in its turn.
+            let mut j = i + 1;
+            while is(toks, j, T::Sym('#')) {
+                j = scheme_end(toks, j)?;
+            }
+            if matches!(t.v.as_str(), "hspace" | "vspace") {
+                return Ok(j);
+            }
+            if t.v == "epsfile" {
+                warn("\\epsfile: a picture in a \\markup is not drawn", t.at);
+                return Ok(j);
+            }
+            if toks.get(j).is_none_or(|n| n.t == T::Sym('}')) {
+                return Ok(j);
+            }
+            words_item(toks, j, lines, line, at)
+        }
+        _ => {
+            // Words, or a command that draws them (`\bold`, `\italic` …).
+            let mut runs = Vec::new();
+            let j = markup_item(toks, i, Weight::Regular, &mut runs, at)?;
+            let words = plain(&runs);
+            if !line.is_empty() && !words.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(&words);
+            Ok(j)
+        }
     }
 }
 

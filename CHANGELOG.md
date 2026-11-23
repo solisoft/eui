@@ -181,6 +181,14 @@ release. A wire change lands here first, is released, and then the pin moves.
   warning instead of losing the title; `\stopStaff` and `\startStaff`,
   passed over with a warning; lyrics sung to a voice nobody named, left
   out with a warning as LilyPond leaves them.
+- The words written after the music are set under it (score #1031): a
+  `\markup` after the last score — a song's verses under its tune — is
+  drawn under the last system, each item of a `\column` a line, at the
+  left in the text face, a line every three staff spaces; on paper a line
+  the page has no room for starts the next page. Its fonts, sizes and
+  spaces are not read, a second column's lines follow the first's, and a
+  picture (`\epsfile`) is passed over with a warning. It was passed over
+  whole; a `\markup` before the music or between two scores still is.
 - A tablature has the strings its tuning gives it (score #1032):
   `\new TabStaff \with { stringTunings = #bass-tuning }` draws a bass's
   four strings, E A D G, and its frets on them — where every tablature
