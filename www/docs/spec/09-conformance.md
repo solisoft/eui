@@ -1138,6 +1138,15 @@ version 7) and a margin.
   the one it names (`a_group_is_joined_by_the_sign_it_names`);
   `\transposition` and `\midi`'s `\tempo` are played
   (`a_transposition_is_played_and_the_midi_block_gives_the_tempo`).
+- **A combined pair says what its context sets** (03 §1.4; score #1021),
+  in `crates/eui-score/tests/part_combine.rs`: `aDueText`, `soloText` and
+  `soloIIText` from a `\with`, a `\set` and a `\layout`, with no warning
+  (`the_texts_are_the_ones_the_context_sets`); a `\set` in either part
+  holds from where it is written
+  (`a_set_inside_either_part_holds_from_where_it_is_written`);
+  `printPartCombineTexts = ##f` and an empty text print nothing, the
+  note's own words staying
+  (`the_texts_are_not_printed_when_the_context_says_so`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11

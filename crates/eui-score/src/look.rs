@@ -192,7 +192,7 @@ const WIDE: [&str; 11] = ["Score", "Staff", "PianoStaff", "GrandStaff", "StaffGr
 
 /// The context properties `\set` is honoured for, and whether they are a
 /// staff's (or the score's) rather than a voice's.
-const CONTEXT_PROPS: [(&str, bool); 9] = [
+const CONTEXT_PROPS: [(&str, bool); 13] = [
     ("fontSize", false),
     ("subdivideBeams", true),
     ("baseMoment", true),
@@ -202,7 +202,46 @@ const CONTEXT_PROPS: [(&str, bool); 9] = [
     ("rehearsalMarkFormatter", true),
     ("barNumberVisibility", true),
     ("currentBarNumber", true),
+    // What `\partCombine` says over its notes (score #1021).
+    (A_DUE_TEXT, true),
+    (SOLO_TEXT, true),
+    (SOLO_II_TEXT, true),
+    (PRINT_PART_TEXTS, true),
 ];
+
+/// `aDueText`: what a combined pair says where its parts come together.
+pub(crate) const A_DUE_TEXT: &str = "aDueText";
+/// `soloText`: what it says where part I is alone.
+pub(crate) const SOLO_TEXT: &str = "soloText";
+/// `soloIIText`: what it says where part II is alone.
+pub(crate) const SOLO_II_TEXT: &str = "soloIIText";
+/// `printPartCombineTexts`: `##f` for none of the three.
+pub(crate) const PRINT_PART_TEXTS: &str = "printPartCombineTexts";
+
+/// The four of them.
+pub(crate) const PART_TEXT_KEYS: [&str; 4] = [A_DUE_TEXT, SOLO_TEXT, SOLO_II_TEXT, PRINT_PART_TEXTS];
+
+/// What `\partCombine` says over a note: which of its three texts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartText {
+    /// Both parts on one note: `aDueText`, "a2".
+    ADue,
+    /// Part I alone: `soloText`, "Solo".
+    Solo,
+    /// Part II alone: `soloIIText`, "Solo II".
+    SoloII,
+}
+
+impl PartText {
+    /// The context property that words it, and LilyPond's word for it.
+    pub(crate) fn key(self) -> (&'static str, &'static str) {
+        match self {
+            PartText::ADue => (A_DUE_TEXT, "a2"),
+            PartText::Solo => (SOLO_TEXT, "Solo"),
+            PartText::SoloII => (SOLO_II_TEXT, "Solo II"),
+        }
+    }
+}
 
 /// A setting's path split: its context, if written, and its key.
 fn split(words: &[String], grob: bool) -> Option<(Option<String>, String)> {
@@ -221,7 +260,8 @@ fn honoured(key: &str, v: &Val) -> bool {
     if let Some(prop) = CONTEXT_PROPS.iter().find(|p| p.0 == key) {
         return match prop.0 {
             "fontSize" | "currentBarNumber" | "baseMoment" => matches!(v, Val::Num(_)),
-            "subdivideBeams" => matches!(v, Val::Bool(_)),
+            "subdivideBeams" | PRINT_PART_TEXTS => matches!(v, Val::Bool(_)),
+            A_DUE_TEXT | SOLO_TEXT | SOLO_II_TEXT => matches!(v, Val::Sym(_)),
             "beatStructure" | "beamExceptions" => matches!(v, Val::List(_)),
             "barNumberVisibility" => matches!(v, Val::Sym(_) | Val::List(_)),
             _ => matches!(v, Val::Sym(s) if formatter(s).is_some()),
@@ -485,7 +525,12 @@ fn value_for(key: &str, d: &Sx) -> Option<Val> {
             },
             _ => return None,
         },
-        "stencil" | "transparent" | "subdivideBeams" | "remove-empty" | "remove-first" => match d {
+        // Words, a string's: `aDueText = "à 2"`.
+        A_DUE_TEXT | SOLO_TEXT | SOLO_II_TEXT => match d {
+            Sx::Str(s) => Val::Sym(s.clone()),
+            _ => return None,
+        },
+        "stencil" | "transparent" | "subdivideBeams" | "remove-empty" | "remove-first" | PRINT_PART_TEXTS => match d {
             Sx::Bool(b) => Val::Bool(*b),
             _ => return None,
         },
@@ -674,6 +719,24 @@ impl LookState {
     /// `\tweak`'s setting, for the next note.
     pub(crate) fn set_once(&mut self, key: String, v: Val) {
         self.set(None, key, v, true);
+    }
+
+    /// The staff's `\partCombine` texts as set now, in [`PART_TEXT_KEYS`]'
+    /// order: the two parts of a pair are read one after the other, and
+    /// the second starts from what stood before the first.
+    pub(crate) fn part_texts(&self) -> Vec<Option<Val>> {
+        PART_TEXT_KEYS.iter().map(|k| self.staff.get(*k).cloned()).collect()
+    }
+
+    /// Set them back.
+    pub(crate) fn put_part_texts(&mut self, values: Vec<Option<Val>>) {
+        self.cached = None;
+        for (key, v) in PART_TEXT_KEYS.iter().zip(values) {
+            match v {
+                Some(v) => self.staff.insert((*key).to_owned(), v),
+                None => self.staff.remove(*key),
+            };
+        }
     }
 
     /// Set a voice's own settings back, at the end of the voice.
@@ -869,12 +932,21 @@ fn known_probe(key: &str) -> bool {
         Val::Sym("numbered".into()),
         Val::Sym("cross".into()),
         Val::Sym("format-mark-numbers".into()),
+        Val::Sym(String::new()),
     ];
     probes.iter().any(|v| honoured(key, v))
 }
 
 /// `= value` at `j` for `key`: set when honoured.
 fn assign(toks: &[Tok], j: usize, state: &mut LookState, ctx: Option<&str>, key: String, once: bool) -> Result<Option<usize>, ScoreError> {
+    // `soloText = \markup { \italic "1." }`: the markup's words, upright
+    // as the text is set.
+    if [A_DUE_TEXT, SOLO_TEXT, SOLO_II_TEXT].contains(&key.as_str()) && crate::parse::is_cmd(toks, j + 1, "markup") {
+        let (runs, end) = crate::parse::markup(toks, j + 2, toks[j + 1].at)?;
+        let words = runs.iter().filter(|r| !r.glyph).map(|r| r.text.as_str()).collect::<Vec<_>>().join(" ");
+        state.set(ctx, key, Val::Sym(words), once);
+        return Ok(Some(end));
+    }
     let end = list_end(toks, value_end(toks, j + 1)?);
     let Some(v) = read(toks, j + 1, end).and_then(|d| value_for(&key, &d)) else { return Ok(None) };
     if !honoured(&key, &v) {
@@ -947,6 +1019,16 @@ fn tweaked(toks: &[Tok], mut k: usize) -> Option<&'static str> {
 pub(crate) fn with_one(look: &Look, key: String, v: Val) -> Look {
     let mut m = look.map().cloned().unwrap_or_default();
     m.insert(key, v);
+    Look::of(m)
+}
+
+/// A look with `key` set to `v`, or not set at all.
+pub(crate) fn with_or_without(look: &Look, key: &str, v: Option<Val>) -> Look {
+    let mut m = look.map().cloned().unwrap_or_default();
+    match v {
+        Some(v) => m.insert(key.to_owned(), v),
+        None => m.remove(key),
+    };
     Look::of(m)
 }
 
@@ -1100,6 +1182,16 @@ fn settle_one(ev: &mut Ev, base: &Map, plain: &Look, cache: &mut Vec<(*const Map
         }
     };
     let look = ev.look.clone();
+    // What `\partCombine` says over it, in the context's words: over the
+    // note, upright, as LilyPond's CombineTextScript — and none when
+    // `printPartCombineTexts` is off, or the text is set to nothing.
+    if let Some(kind) = ev.part_text {
+        let (key, default) = kind.key();
+        let words = look.sym(key).unwrap_or(default);
+        if look.flag(PRINT_PART_TEXTS) != Some(false) && !words.is_empty() {
+            ev.texts.insert(0, crate::parse::Words { text: words.to_owned(), dir: -1, runs: vec![crate::parse::Run::words(words, crate::glyphs::Weight::Regular)], pedal: 0 });
+        }
+    }
     // Words written with `-`: the side TextScript.direction says, else
     // under the note — a markup over it, as the Soli engraver set it.
     for w in &mut ev.texts {

@@ -1415,6 +1415,9 @@ pub struct Ev {
     /// `\scaleDurations n/d`: the note lasts n/d of its written value, with
     /// no tuplet drawn (`ticks` is the scaled length).
     pub scale: Option<(i64, i64)>,
+    /// The first note of a stretch `\partCombine` says something over:
+    /// which of its texts, worded as the context sets it (score #1021).
+    pub part_text: Option<crate::look::PartText>,
 }
 
 /// A syllable of `\addlyrics`.
@@ -4305,6 +4308,11 @@ fn part_combine(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, St
     let outer = std::mem::take(&mut st.events);
     let outer_modes = std::mem::take(&mut st.look.combine);
     let outer_voice = st.look.voice.clone();
+    // The pair's texts (score #1021): each part starts from what the
+    // staff said before the pair, and what either sets holds after it.
+    let base = st.look.current();
+    let texts_before = st.look.part_texts();
+    let mut texts_set = Vec::new();
     let mut parts = Vec::new();
     let mut j = i + 1;
     for _ in 0..2 {
@@ -4312,6 +4320,8 @@ fn part_combine(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, St
             st.events = outer;
             return refuse("\\partCombine wants two parts, each its music", at);
         }
+        texts_set.push(st.look.part_texts());
+        st.look.put_part_texts(texts_before.clone());
         st.look.restore_voice(outer_voice.clone());
         j = expr(toks, j, st, hd)?;
         if let Some(g) = st.graces.first() {
@@ -4320,11 +4330,17 @@ fn part_combine(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, St
         parts.push(std::mem::take(&mut st.events));
     }
     let modes = std::mem::replace(&mut st.look.combine, outer_modes);
+    // Part II's where it set one, else part I's.
+    let by_ii = st.look.part_texts();
+    let by_i = texts_set.pop().unwrap_or_default();
+    let after: Vec<Option<crate::look::Val>> =
+        by_ii.iter().zip(&texts_before).enumerate().map(|(k, (ii, before))| if ii == before { by_i.get(k).cloned().unwrap_or_else(|| ii.clone()) } else { ii.clone() }).collect();
+    st.look.put_part_texts(after);
     st.look.restore_voice(outer_voice);
     st.events = outer;
     let second = parts.pop().unwrap_or_default();
     let first = parts.pop().unwrap_or_default();
-    let combined = crate::combine::combine(first, second, modes, dir, at)?;
+    let combined = crate::combine::combine(first, second, modes, dir, &base, at)?;
     st.events.extend(combined);
     Ok(j)
 }
@@ -6374,7 +6390,7 @@ pub(crate) fn letters(n: i64) -> String {
 
 /// A `\markup`'s pieces from `i`, just after the command, and the token after
 /// it.
-fn markup(toks: &[Tok], i: usize, at: usize) -> Result<(Vec<Run>, usize), ScoreError> {
+pub(crate) fn markup(toks: &[Tok], i: usize, at: usize) -> Result<(Vec<Run>, usize), ScoreError> {
     let mut runs = Vec::new();
     let j = markup_item(toks, i, Weight::Regular, &mut runs, at)?;
     if runs.is_empty() {

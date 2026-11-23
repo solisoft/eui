@@ -24,6 +24,14 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- `\partCombine`'s words are the ones the context sets (score #1021):
+  `aDueText`, `soloText` and `soloIIText` — `\set Staff.soloText = "1."`
+  before the pair or inside either part (from where it is written, the
+  parts sounding together), a staff's `\with { aDueText = "à 2" }`, a
+  `\layout`'s `\context { \Staff … }`; a string, or a `\markup`'s words —
+  where "a2", "Solo" and "Solo II" were the only ones. A text set to `""`
+  is not printed, and `printPartCombineTexts = ##f` prints none of the
+  three. They were read and passed over with a warning.
 - `\partCombine` (score #405), and `\partcombine`, where it was refused:
   two parts on one staff, cut where both start a note or a rest together.
   The same notes are one note, "a2" over the first where the parts come

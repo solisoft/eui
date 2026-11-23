@@ -275,3 +275,68 @@ fn what_the_staff_leaves_out_is_played_as_two_staves_play_it() {
     assert_eq!(together, apart);
     assert_eq!(together.iter().filter(|n| n.0 == 69).count(), 1);
 }
+
+/// What every note of the staff says, in order, the silent ones left out.
+fn all_said(p: &Parsed) -> Vec<String> {
+    items(p).iter().flat_map(|e| said(e)).collect()
+}
+
+#[test]
+fn the_texts_are_the_ones_the_context_sets() {
+    // Score #1021: `aDueText`, `soloText` and `soloIIText`, as LilyPond's
+    // part combiner reads them. Solo, Solo II, then a2.
+    let music = "\\partCombine { c''4 d'' r2 e''4 f'' } { r2 a'4 b' e''4 f'' }";
+    assert_eq!(all_said(&read(&format!("\\new Staff {music}"))), vec!["Solo", "Solo II", "a2"], "LilyPond's own words where nothing is set");
+    // In the staff's `\with`.
+    let with = "\\with { aDueText = \"à 2\" soloText = \"1.\" soloIIText = \"2.\" }";
+    assert_eq!(all_said(&read(&format!("\\new Staff {with} {music}"))), vec!["1.", "2.", "à 2"]);
+    // With `\set`, before the combined music.
+    let set = "\\set Staff.aDueText = \"à 2\" \\set Staff.soloText = #\"1.\" \\set Staff.soloIIText = \\markup { \\italic \"2.\" }";
+    assert_eq!(all_said(&read(&format!("\\new Staff {{ {set} {music} }}"))), vec!["1.", "2.", "à 2"]);
+    // In a `\layout`'s context, for every staff.
+    let layout = "\\layout { \\context { \\Staff soloText = \"I\" soloIIText = \"II\" } }";
+    assert_eq!(all_said(&read(&format!("\\score {{ \\new Staff {{ {music} }} {layout} }}"))), vec!["I", "II", "a2"]);
+    // None of them warns as a setting passed over.
+    for src in [format!("\\new Staff {with} {music}"), format!("\\new Staff {{ {set} {music} }}")] {
+        let warned = eui_score::warnings(&src).unwrap();
+        assert!(!warned.iter().any(|w| w.message.contains("Text")), "{warned:?}");
+    }
+}
+
+#[test]
+fn a_set_inside_either_part_holds_from_where_it_is_written() {
+    // In part I, before its first note: every text after it.
+    let p = read("\\new Staff \\partCombine { \\set Staff.soloText = \"1.\" c''4 d'' r2 e''4 f'' } { r2 a'4 b' e''4 f'' }");
+    assert_eq!(all_said(&p), vec!["1.", "Solo II", "a2"]);
+    // In part II alone: the note the text stands on is part I's, and the
+    // text is still the one part II set.
+    let p = read("\\new Staff \\partCombine { c''4 d'' r2 e''4 f'' } { \\set Staff.soloText = \"1.\" \\set Staff.aDueText = \"à 2\" r2 a'4 b' e''4 f'' }");
+    assert_eq!(all_said(&p), vec!["1.", "Solo II", "à 2"]);
+    // Midway: the second solo takes the new word, the first the old.
+    let p = read("\\new Staff \\partCombine { c''4 d'' r2 \\set Staff.soloText = \"1. solo\" e''4 f'' } { r2 a'4 b' r2 }");
+    assert_eq!(all_said(&p), vec!["Solo", "Solo II", "1. solo"]);
+    // `\unset` gives LilyPond's word back.
+    let p = read("\\new Staff { \\set Staff.soloText = \"1.\" \\partCombine { \\unset Staff.soloText c''4 d'' } { r2 } }");
+    assert_eq!(all_said(&p), vec!["Solo"]);
+}
+
+#[test]
+fn the_texts_are_not_printed_when_the_context_says_so() {
+    let music = "\\partCombine { c''4 d'' r2 e''4 f'' } { r2 a'4 b' e''4 f'' }";
+    for src in [
+        format!("\\new Staff \\with {{ printPartCombineTexts = ##f }} {music}"),
+        format!("\\new Staff {{ \\set Staff.printPartCombineTexts = ##f {music} }}"),
+        format!("\\score {{ \\new Staff {{ {music} }} \\layout {{ \\context {{ \\Staff printPartCombineTexts = ##f }} }} }}"),
+    ] {
+        let p = read(&src);
+        assert!(all_said(&p).is_empty(), "{src}: {:?}", all_said(&p));
+        // The parts are combined all the same.
+        assert_eq!(items(&p).len(), 6, "{src}");
+    }
+    // An empty text prints nothing for its kind alone.
+    let p = read(&format!("\\new Staff \\with {{ aDueText = \"\" }} {music}"));
+    assert_eq!(all_said(&p), vec!["Solo", "Solo II"]);
+    // A note's own words stay.
+    let p = read("\\new Staff \\with { printPartCombineTexts = ##f } \\partCombine { c''4^\"dolce\" d'' } { c''4 d'' }");
+    assert_eq!(all_said(&p), vec!["dolce"]);
+}

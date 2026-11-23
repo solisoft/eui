@@ -681,7 +681,14 @@ construct as LilyPond 2.25 draws it:
   `\partCombineUnisono`, `\partCombineSoloI`, `\partCombineSoloII` and
   `\partCombineAutomatic` say how from where they are written;
   `\partCombineUp` and `\partCombineDown` set a pair's stems, two pairs
-  sharing a staff in four voices. The MIDI plays both parts.
+  sharing a staff in four voices. The MIDI plays both parts. The three
+  texts are the context's `aDueText`, `soloText` and `soloIIText` (score
+  #1021) — a string, or a `\markup`'s words set upright — from a `\set`
+  before the pair or in either part (in force from where it is written,
+  the parts sounding together), the staff's `\with` or a `\layout`'s
+  context; a text set to `""` is not printed, and
+  `printPartCombineTexts = ##f` prints none. A `\unset` gives back what
+  the music set before it, not LilyPond's word under a `\with`.
 - *Signs an engraver is expected to know* (score #1026):
   the ornaments `\reverseturn`, `\prallprall`, `\prallmordent`,
   `\upprall`, `\lineprall`, the fermatas `\veryshortfermata`,

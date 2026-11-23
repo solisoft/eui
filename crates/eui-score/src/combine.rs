@@ -17,9 +17,8 @@
 //! sounds, as in LilyPond's MIDI: what a solo or a unison leaves out of the
 //! staff is kept on the note drawn there, as [`Ev::unseen`], and played.
 
-use crate::glyphs::Weight;
-use crate::look::Combine;
-use crate::parse::{merge, refuse, span, staff_level, Ev, Kind, Run, Words};
+use crate::look::{Combine, Look, PartText, Val};
+use crate::parse::{merge, refuse, span, staff_level, Ev, Kind};
 use crate::ScoreError;
 
 /// What marks the music of a combined pair, its voices' numbers after it.
@@ -179,16 +178,45 @@ fn unite(mut x: Ev, y: &Ev, chord: bool) -> Ev {
     x
 }
 
-/// "a2", "Solo", "Solo II": over the note, upright, as LilyPond's
-/// CombineTextScript prints them.
-fn say(ev: &mut Ev, words: &str) {
-    ev.texts.insert(0, Words { text: words.to_owned(), dir: -1, runs: vec![Run::words(words, Weight::Regular)], pedal: 0 });
+/// What `key` is set to at `t`, the parts sounding together: what the
+/// part that set it last, at `t` or before, set it to — `base` where
+/// neither has. (The parts are read one after the other, so a note of one
+/// knows nothing of a `\set` in the other.)
+fn in_force(key: &str, base: &Look, parts: [&Part; 2], t: i64) -> Option<Val> {
+    let mut best = (-1, base.get(key).cloned());
+    for part in parts {
+        let mut before = base.get(key);
+        for (at, ev) in part.items.iter().take_while(|it| it.0 <= t) {
+            let now = ev.look.get(key);
+            if now != before && *at >= best.0 {
+                best = (*at, now.cloned());
+            }
+            before = now;
+        }
+    }
+    best.1
+}
+
+/// What a stretch says over its first note — "a2", "Solo", "Solo II", or
+/// the words the context sets for them (`aDueText`, `soloText`,
+/// `soloIIText`; score #1021): the note is told which, and the words are
+/// the ones in force once the staff's and the layout's settings are known
+/// (`look::settle`). What either part `\set` by then is the note's.
+fn say(ev: &mut Ev, kind: PartText, base: &Look, parts: [&Part; 2], t: i64) {
+    ev.part_text = Some(kind);
+    for key in [kind.key().0, crate::look::PRINT_PART_TEXTS] {
+        let set = in_force(key, base, parts, t);
+        if ev.look.get(key) != set.as_ref() {
+            ev.look = crate::look::with_or_without(&ev.look, key, set);
+        }
+    }
 }
 
 /// The two parts as one staff's events: `dir` 1 for `\partCombineUp` (its
 /// stems up, its voices the first and third), -1 for `\partCombineDown`.
-/// `modes`: the `\partCombine…` commands written in either part, by time.
-pub(crate) fn combine(part_i: Vec<Ev>, part_ii: Vec<Ev>, mut modes: Vec<(i64, Combine)>, dir: i8, at: usize) -> Result<Vec<Ev>, ScoreError> {
+/// `modes`: the `\partCombine…` commands written in either part, by time;
+/// `base`: the settings in force before the pair.
+pub(crate) fn combine(part_i: Vec<Ev>, part_ii: Vec<Ev>, mut modes: Vec<(i64, Combine)>, dir: i8, base: &Look, at: usize) -> Result<Vec<Ev>, ScoreError> {
     let originals = (part_i.clone(), part_ii.clone());
     let a = split(part_i, at)?;
     let b = split(part_ii, at)?;
@@ -286,9 +314,9 @@ pub(crate) fn combine(part_i: Vec<Ev>, part_ii: Vec<Ev>, mut modes: Vec<(i64, Co
         }
         // What the stretch says when it starts something new.
         let words = match state {
-            State::Unisono if last_said != Some(State::Unisono) => Some("a2"),
-            State::SoloI if last_said != Some(State::SoloI) => Some("Solo"),
-            State::SoloII if last_said != Some(State::SoloII) => Some("Solo II"),
+            State::Unisono if last_said != Some(State::Unisono) => Some(PartText::ADue),
+            State::SoloI if last_said != Some(State::SoloI) => Some(PartText::Solo),
+            State::SoloII if last_said != Some(State::SoloII) => Some(PartText::SoloII),
             _ => None,
         };
         if state != State::Rests {
@@ -296,7 +324,7 @@ pub(crate) fn combine(part_i: Vec<Ev>, part_ii: Vec<Ev>, mut modes: Vec<(i64, Co
         }
         if let Some(words) = words {
             if let Some(first) = set.iter_mut().find(|e| e.k == Kind::Note) {
-                say(first, words);
+                say(first, words, base, [&a, &b], t0);
             }
         }
         if dir != 0 {
