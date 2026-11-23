@@ -432,16 +432,22 @@ pub fn page_paths_heads(eng: &Engraved, sp: f64, page: usize, ranges: &mut Range
             draw_system_heads(&mut paths, eng, sys, sys.top, sp, ranges, heads.as_deref_mut());
         }
     }
-    draw_after(&mut paths, eng, sp, page, 0.0);
+    draw_after(&mut paths, eng, sp, page, 0.0, None);
     paths
 }
 
-/// The words written after the music on page `page` (score #1031), `up`
-/// staff spaces higher than the page has them: in a band's own frame.
-fn draw_after(paths: &mut Vec<Path>, eng: &Engraved, sp: f64, page: usize, up: f64) {
+/// The words written outside the music on page `page` (score #1031,
+/// #1025), `up` staff spaces higher than the page has them: in a band's
+/// own frame — those whose ink reaches into the band `tall` staff spaces
+/// high, where one is given; a band clips what it draws to its box, so
+/// words two bands share are drawn in both and meet where they were.
+fn draw_after(paths: &mut Vec<Path>, eng: &Engraved, sp: f64, page: usize, up: f64, tall: Option<f64>) {
     let mut pen = Pen { paths, sp, heads: None, scale: None };
     for w in eng.after.iter().filter(|w| w.page == page) {
-        pen.text(&w.text, Weight::Regular, w.x, w.y - up, crate::engrave::after_em());
+        let (top, bottom) = (w.y - w.em - up, w.y + 0.4 * w.em - up);
+        if tall.is_none_or(|tall| bottom >= 0.0 && top <= tall) {
+            pen.text(&w.text, w.weight, w.x, w.y - up, w.em);
+        }
     }
 }
 
@@ -499,8 +505,10 @@ pub fn bands(eng: &Engraved, sp: f64, page: usize, total: i64) -> Vec<Band> {
     }
     if let Some(last) = out.last_mut() {
         last.h = (total - last.y).max(0);
-        // The words after the music, in the band they fall under.
-        draw_after(&mut last.paths, eng, sp, page, last.y as f64 / sp);
+    }
+    // The words outside the music, in the bands they fall in.
+    for band in &mut out {
+        draw_after(&mut band.paths, eng, sp, page, band.y as f64 / sp, Some(band.h as f64 / sp));
     }
     out
 }
@@ -627,7 +635,8 @@ pub fn head_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
     let mut pen = Pen { paths: &mut paths, sp, heads: None, scale: None };
     let left = eng.left;
     draw_titles(&mut pen, eng, page);
-    if page > 0 && eng.numbered {
+    // No number over the titles, where title pages put them on a later page.
+    if page > 0 && eng.numbered && (page != eng.head_page || eng.header.lines.is_empty()) {
         let number = (page + 1).to_string();
         let e = em(0.0);
         let nx = if (page + 1) % 2 == 1 { left + eng.width - text_width(&number, Weight::Regular, e) } else { left };
@@ -637,7 +646,7 @@ pub fn head_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
 }
 
 fn draw_titles(pen: &mut Pen, eng: &Engraved, page: usize) {
-    if page != 0 {
+    if page != eng.head_page {
         return;
     }
     let margin = if !eng.pages.is_empty() && eng.paper.is_some() { 2.83 + eng.head_room } else { 1.0 };
@@ -658,7 +667,7 @@ pub fn print_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
             draw_system(&mut paths, eng, sys, sys.top, sp, &mut Vec::new());
         }
     }
-    draw_after(&mut paths, eng, sp, page, 0.0);
+    draw_after(&mut paths, eng, sp, page, 0.0, None);
     paths
 }
 

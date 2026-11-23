@@ -27,6 +27,9 @@ pub(crate) struct Pages<'a> {
     pub header: &'a HashMap<String, String>,
     /// What `\paper` says of the headers and footers.
     pub spec: &'a PaperSpec,
+    /// What each book part after the first says of its own
+    /// (`Parsed::part_papers`).
+    pub parts: &'a [PaperSpec],
     /// The words under the outlines.
     pub text: bool,
 }
@@ -80,11 +83,24 @@ pub(crate) fn pdf(eng: &Engraved, title: &str, paper: &Paper, pages: &Pages) -> 
 fn page_ink(eng: &Engraved, sp: f64, k: usize, count: usize, title: &str, paper: &Paper, pages: &Pages) -> (Vec<Path>, Vec<Path>) {
     let mut ink = print_paths(eng, sp, k);
     let mut grey = Vec::new();
-    let spec = pages.spec;
+    // The page's book part's own `\paper`, where it has one (score #1025):
+    // its headers and footers, its top margin, its page numbers — counted
+    // from its first page where it says its own `first-page-number`.
+    let part = eng.pages.get(k).map_or(0, |p| p.part);
+    let own = part.checked_sub(1).and_then(|p| pages.parts.get(p));
+    let spec = own.unwrap_or(pages.spec);
+    let paper = &match own {
+        Some(own) => Paper { pt: paper.pt, ..Paper::of(&PaperSpec { staff_size: pages.spec.staff_size, size: pages.spec.size.clone(), ..own.clone() }) },
+        None => *paper,
+    };
     let odd = k.is_multiple_of(2);
     let e = em(-2.0);
     let foot_y = paper.h - paper.foot();
-    let at = page_at(eng, pages.spec, k, count);
+    let mut at = page_at(eng, spec, k, count);
+    if let Some(first) = own.and_then(|o| o.first_page_number).filter(|n| Some(*n) != pages.spec.first_page_number) {
+        let start = eng.pages.iter().position(|p| p.part == part).unwrap_or(k);
+        at.number = first + (k - start) as i64;
+    }
     let say = |parts: &[PagePart]| words_of(parts, pages.header, title, &at);
     let footer = if odd { spec.odd_footer.as_ref() } else { spec.even_footer.as_ref().or(spec.odd_footer.as_ref()) };
     match footer {
@@ -138,21 +154,10 @@ pub(crate) struct PageAt {
     printed: bool,
 }
 
-/// Page `k` of `count` of `eng`: its number, and whether a book part starts
-/// or ends on it — its first system starts a `\bookpart`, or the next
-/// page's does.
+/// Page `k` of `count` of `eng`, with what its book part's `\paper` says
+/// (`spec`): its number, and whether a book part starts or ends on it.
 pub(crate) fn page_at(eng: &Engraved, spec: &PaperSpec, k: usize, count: usize) -> PageAt {
-    let opens = |k: usize| {
-        k == 0
-            || eng
-                .pages
-                .get(k)
-                .and_then(|p| p.systems.first())
-                .and_then(|&s| eng.systems.get(s))
-                .and_then(|sys| sys.lines.first())
-                .and_then(|l| eng.staves.first().and_then(|bars| bars.get(l.bars.start)))
-                .is_some_and(|b| b.part)
-    };
+    let opens = |k: usize| k == 0 || eng.pages.get(k).is_some_and(|p| p.part_first);
     let part_first = opens(k);
     let printed = spec.print_page_number.unwrap_or(true);
     PageAt {

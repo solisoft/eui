@@ -109,7 +109,7 @@ fn the_words_stand_under_the_music_as_score_markup_spacing_says() {
 fn a_block_of_words_follows_the_one_before_as_markup_markup_spacing_says() {
     let (ascent, descent) = ink();
     // Two blocks: a column of two lines, then a line.
-    assert_eq!(parse(&worded("")).unwrap().after_blocks, vec![2]);
+    assert_eq!(parse(&worded("")).unwrap().blocks.len(), 2);
     let ys = |paper: &str| -> Vec<f64> { paged(&worded(paper)).after.iter().map(|w| w.y).collect() };
     let plain = ys("");
     // A block's own lines, three spaces from baseline to baseline.

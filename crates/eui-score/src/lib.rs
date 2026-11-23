@@ -33,6 +33,7 @@ pub mod frets;
 pub mod glyphs;
 pub mod look;
 pub mod marks;
+pub mod markup;
 pub mod measure;
 pub mod midi;
 pub mod parse;
@@ -405,6 +406,6 @@ fn pdf_with(src: &str, title: &str, text: bool) -> Result<String, ScoreError> {
         let parsed = parse::parse(src)?;
         let (eng, paper, spec) = fit_pages(&parsed)?;
         let title = parsed.header.get("title").map_or(title, String::as_str);
-        draw::drawing(|| pdf::pdf(&eng, title, &paper, &pdf::Pages { header: &parsed.header, spec: &spec, text }))
+        draw::drawing(|| pdf::pdf(&eng, title, &paper, &pdf::Pages { header: &parsed.header, spec: &spec, parts: &parsed.part_papers, text }))
     })
 }

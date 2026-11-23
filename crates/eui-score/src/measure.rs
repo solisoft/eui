@@ -812,7 +812,7 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
                 change = (None, None);
                 let text = |k: usize| ev.texts.get(k).map(|w| w.text.clone()).unwrap_or_default();
                 fresh = Some((text(0), text(1)));
-                part = ev.page;
+                part = ev.part;
                 continue;
             }
             Kind::Partial => {

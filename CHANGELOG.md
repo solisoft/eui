@@ -24,6 +24,30 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- Words outside the scores are set where they are written (score #1025):
+  a top-level `\markup` before the first score, between two scores or
+  after the last is a block of the page, spaced by
+  `markup-system-spacing`, `score-markup-spacing`,
+  `markup-markup-spacing` and `top-markup-spacing`, and going on from a
+  page to the next line by line. It is laid out as LilyPond lays it out:
+  `\column`, `\center-column` and `\right-column`, columns side by
+  side, `\line`, `\concat`, `\fill-line`, `\wordwrap`, `\hspace`,
+  `\vspace`, `\raise`, `\lower`, `\bold`, `\italic`, `\fontsize`
+  and the named sizes, `\super`, `\sub`, the aligning commands and
+  `\fromproperty #'header:…`. One before the music or between two
+  scores was passed over with a warning; the words after the music were
+  plain lines at the left, their sizes and spaces unread. A page of
+  words before a `\pageBreak`, or in a `\bookpart` of its own, is a
+  title page; `\pageBreak` is honoured between any two of scores and
+  words. A `\bookpart`'s own `\paper` sets its pages' top and bottom
+  margins, headers, footers and page numbers, where it set the whole
+  file's; a book part's last page is ragged, as LilyPond's.
+  `eui_score::Engraved::after` holds every such piece of words with its
+  face and size (`weight`, `em`); `Engraved::head_page` is the page the
+  titles are on, `Page::part` and `Page::part_first` a page's book part.
+  `Parsed::blocks` (`eui_score::markup`) replaces `after_words` and
+  `after_blocks`.
+
 - Page headers and footers know more pages (score #1025): `\on-the-fly
   #part-first-page` and `#not-part-first-page` (a `\bookpart`'s first
   page), `#create-page-number-stencil`, `#single-page`, and LilyPond

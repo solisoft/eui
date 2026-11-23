@@ -89,13 +89,12 @@ fn le_grand_cerf_opens_as_it_is() {
     );
     // The song's words, written in a \markup after the score: under the music.
     assert_eq!(
-        p.after_words,
+        p.after_lines(),
         [
             "Dans sa maison un grand cerf",
             "regardait par la fenêtre",
             "un lapin venir a lui",
             "et frapper ainsi.",
-            "",
             "Cerf, cerf,",
             "ouvre moi !",
             "ou le chasseur me tuera !",
@@ -223,13 +222,17 @@ fn words_after_the_music_are_set_under_it() {
     let plain = "\\book { \\score { { c'1 } \\layout {} } }";
     let book = "\\book { \\score { { c'1 } \\layout {} } \\markup { \\vspace #1 \\hspace #10 \\override #'(font-name . \"x\") \\fontsize #-1 \\column { \"one two\" \"    \" \"three\" } \\column { \" \" { \\hspace #5 \\epsfile #X #10 #\"l.eps\" } } } }";
     // A column's items a line each, a line of spaces an empty one; the picture said.
-    assert_eq!(read(book).after_words, ["one two", "", "three"]);
+    assert_eq!(read(book).after_lines(), ["one two", "three"]);
     assert_eq!(said(book), vec!["\\epsfile: a picture in a \\markup is not drawn"]);
     // On a screen: under the last system, the score that much taller.
     let (with, without) = (engrave(book, 100.0, &Layout::default()).unwrap(), engrave(plain, 100.0, &Layout::default()).unwrap());
     let lines: Vec<(&str, f64)> = with.after.iter().map(|w| (w.text.as_str(), w.y)).collect();
     assert_eq!(lines.iter().map(|l| l.0).collect::<Vec<_>>(), ["one two", "three"]);
-    assert!(lines[0].1 > with.systems[0].bottom && lines[1].1 == lines[0].1 + 6.0, "{lines:?}");
+    // Two lines down, a `\fontsize #-1`'s lines: a step nearer one another than three spaces.
+    let skip = 3.0 * (-1.0_f64 / 6.0).exp2();
+    assert!(lines[0].1 > with.systems[0].bottom && (lines[1].1 - lines[0].1 - 2.0 * skip).abs() < 1e-9, "{lines:?}");
+    // `\hspace #10` before the column: that far from where the staves start, and more.
+    assert!(with.after.iter().all(|w| w.x > with.left + 10.0 && w.em < eui_score::text::em(0.0)));
     assert!(with.height > without.height + 6.0 && with.height > lines[1].1);
     assert!(without.after.is_empty());
     let (drawn, bare) = (paths(&with, 8.0, 0).unwrap().0, paths(&without, 8.0, 0).unwrap().0);
@@ -254,13 +257,13 @@ fn words_after_the_music_are_set_under_it() {
     }
     assert!(pdf(&long, "t").unwrap().starts_with("%PDF"));
     // Words on one line, and two blocks, the second from its own line on.
-    assert_eq!(read("{ c'1 } \\markup \\bold \"Fin\"").after_words, ["Fin"]);
+    assert_eq!(read("{ c'1 } \\markup \\bold \"Fin\"").after_lines(), ["Fin"]);
     let two = read("{ c'1 } \\markup { one \\italic two } \\markup { \\line { three four } }");
-    assert_eq!((two.after_words, two.after_blocks), (vec!["one two".to_owned(), "three four".to_owned()], vec![1]));
-    // Before the music, or between two scores, they are still passed over.
+    assert_eq!((two.after_lines(), two.blocks.len()), (vec!["one two".to_owned(), "three four".to_owned()], 2));
+    // Before the music, or between two scores, they are words of the page too (score #1025).
     for src in ["\\markup { \"Preface\" } { c'1 }", "\\score { { c'1 } } \\markup { \"Interlude\" } \\score { { d'1 } }"] {
-        assert!(read(src).after_words.is_empty(), "{src}");
-        assert_eq!(said(src), vec!["\\markup outside the music is not drawn"], "{src}");
+        assert_eq!((read(src).blocks.len(), read(src).blocks[0].before), (1, usize::from(src.contains("Interlude"))), "{src}");
+        assert!(said(src).is_empty(), "{src}");
     }
 }
 

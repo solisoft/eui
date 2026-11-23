@@ -1273,6 +1273,8 @@ pub struct Ev {
     pub v: String,
     /// `\pageBreak`.
     pub page: bool,
+    /// A movement that starts a `\bookpart` (score #1025).
+    pub part: bool,
     /// An ending that goes back.
     pub closed: bool,
     /// `\tempo`'s mark, and on a note the mark written before it.
@@ -1849,13 +1851,28 @@ pub struct Parsed {
     pub spacing: SpacingSpanner,
     /// What the music writes out: what layout has to draw (score #540).
     pub written: crate::written::Written,
-    /// The words of the `\markup` blocks written after the music — a song's
-    /// verses under its tune (score #1031) — a line each, one block after
-    /// the other: set under the last system.
-    pub after_words: Vec<String>,
-    /// Where each block after the first starts in `after_words`: the room
-    /// between two blocks is `markup-markup-spacing`'s (score #1025).
-    pub after_blocks: Vec<usize>,
+    /// The `\markup` blocks written outside the scores, in the order they
+    /// are written — a title page before the music, words between two
+    /// scores, a song's verses under its tune (score #1031, #1025): each
+    /// says the score it stands before.
+    pub blocks: Vec<crate::markup::Block>,
+    /// How many of `blocks` the titles come after: the title pages of the
+    /// book parts written before the one whose header titles the piece.
+    pub head_after: usize,
+    /// The first score starts a book part of its own, after title pages.
+    pub first_part: bool,
+    /// What each `\bookpart` after the first says of its own pages — its
+    /// margins, its headers and footers, its page numbers — over the
+    /// file's `paper`: the second part's first.
+    pub part_papers: Vec<PaperSpec>,
+}
+
+impl Parsed {
+    /// The words written after the last score, a line each (score #1031).
+    pub fn after_lines(&self) -> Vec<String> {
+        let last = self.blocks.iter().map(|b| b.before).max().unwrap_or(0);
+        self.blocks.iter().filter(|b| b.before == last).flat_map(|b| b.lines(1000.0)).collect()
+    }
 }
 
 /// The page a source asks for: `\paper { #(set-paper-size "letter")
@@ -2134,9 +2151,8 @@ struct Base {
     /// The header being read belongs to a movement after the first, not to
     /// the piece: its `piece` and `opus` are the movement's title.
     local: Option<HashMap<String, String>>,
-    /// The `\markup` blocks read outside the music: the notes read before
-    /// each, where it starts, and its lines.
-    words: Vec<(usize, usize, Vec<String>)>,
+    /// The `\markup` blocks read outside the music.
+    blocks: Vec<crate::markup::Block>,
 }
 
 struct St {
@@ -2239,7 +2255,7 @@ pub(crate) fn is_cmd(toks: &[Tok], i: usize, v: &str) -> bool {
     toks.get(i).is_some_and(|k| k.t == T::Cmd && k.v == v)
 }
 
-fn at_of(toks: &[Tok], i: usize) -> usize {
+pub(crate) fn at_of(toks: &[Tok], i: usize) -> usize {
     toks.get(i).map_or(0, |k| k.at)
 }
 
@@ -2752,13 +2768,23 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
         quotes: std::rc::Rc::default(),
         compress: 0,
         local: None,
-        words: Vec::new(),
+        blocks: Vec::new(),
     };
     // The file's scores, one after another: `\score { … }` blocks, music
     // written without one, inside `\book { }` and `\bookpart { }`.
     let mut movements: Vec<Movement> = Vec::new();
-    let mut books: Vec<usize> = Vec::new();
+    // The `\book` and `\bookpart` blocks open: where each starts, and
+    // whether it is a book part with pages of its own.
+    let mut books: Vec<(usize, bool)> = Vec::new();
     let mut new_page = false;
+    let mut new_part = false;
+    // The blocks of words that have their place, and how many the titles follow.
+    let mut placed = 0;
+    let mut head_after = 0;
+    // What the file says of its pages outside the book parts, kept while a
+    // part says its own; each part's, when it closes.
+    let mut whole: Option<PaperSpec> = None;
+    let mut part_papers: Vec<PaperSpec> = Vec::new();
     let mut i = 0;
     loop {
         let before = i;
@@ -2766,30 +2792,70 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
         if i != before && !movements.is_empty() {
             beyond();
         }
+        // The words just read stand before the next score: the first of
+        // them starts the page a `\pageBreak` or a book part asked for.
+        for block in st.blocks.iter_mut().skip(placed) {
+            block.before = movements.len();
+            block.page = std::mem::take(&mut new_page);
+            block.part = std::mem::take(&mut new_part);
+        }
+        placed = st.blocks.len();
         let Some(t) = toks.get(i) else { break };
         if t.t == T::Cmd && (t.v == "book" || t.v == "bookpart") {
             if !is(&toks, i + 1, T::Sym('{')) {
                 return refuse(format!("\\{} wants a {{ block }}", t.v), t.at);
             }
             beyond();
-            // A book part after the first starts a page; its header titles it.
-            if t.v == "bookpart" && !movements.is_empty() {
+            // A book part after the first starts a page; its header titles
+            // it, and its `\paper` is its own (score #1025).
+            let later = t.v == "bookpart" && (!movements.is_empty() || !st.blocks.is_empty());
+            if later {
                 new_page = true;
-                st.local = Some(HashMap::new());
+                new_part = true;
+                whole.get_or_insert_with(|| st.paper.clone());
+                if movements.is_empty() {
+                    // Title pages so far: the titles are this part's, unless
+                    // a part before it has said them.
+                    const TITLES: [&str; 9] = ["dedication", "title", "subtitle", "subsubtitle", "poet", "instrument", "composer", "meter", "arranger"];
+                    if !TITLES.iter().any(|f| st.header.get(*f).is_some_and(|v| !v.trim().is_empty())) {
+                        head_after = st.blocks.len();
+                    }
+                } else {
+                    st.local = Some(HashMap::new());
+                }
             }
-            books.push(t.at);
+            books.push((t.at, later));
             i += 2;
             continue;
         }
         if t.t == T::Sym('}') && !books.is_empty() {
-            books.pop();
+            if let (Some((_, true)), Some(whole)) = (books.pop(), &whole) {
+                // The part's own pages; the file's go on as they were. The
+                // lines are as wide in every part: the breaker has one width.
+                if (st.paper.left, st.paper.right, st.paper.line_width, st.paper.indent) != (whole.left, whole.right, whole.line_width, whole.indent) {
+                    warn("a \\bookpart's own left-margin, right-margin, line-width and indent are every part's: its top and bottom margins, headers, footers and page numbers are its own", toks[i].at);
+                }
+                part_papers.push(st.paper.clone());
+                st.paper = PaperSpec {
+                    top: whole.top,
+                    bottom: whole.bottom,
+                    odd_header: whole.odd_header.clone(),
+                    even_header: whole.even_header.clone(),
+                    odd_footer: whole.odd_footer.clone(),
+                    even_footer: whole.even_footer.clone(),
+                    first_page_number: whole.first_page_number,
+                    print_page_number: whole.print_page_number,
+                    print_first_page_number: whole.print_first_page_number,
+                    ..st.paper.clone()
+                };
+            }
             i += 1;
             continue;
         }
         if t.t == T::Cmd && t.v == "pageBreak" {
-            // Between two scores (score #1025): the next starts a page. Before
-            // the first — a title page's — there is no page before it to end.
-            new_page = !movements.is_empty();
+            // Between two scores, or words and a score (score #1025): what
+            // follows starts a page. Before anything there is no page to end.
+            new_page = !movements.is_empty() || !st.blocks.is_empty();
             i += 1;
             continue;
         }
@@ -2804,19 +2870,30 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
         let (staves, groups, j) = score(&toks, i, &mut st)?;
         i = j;
         let header = st.local.take().unwrap_or_default();
-        movements.push(Movement { staves, groups, header, page: std::mem::take(&mut new_page), at });
+        // A page asked for after the words before this score ends them:
+        // the break is theirs, not the score before's.
+        let mut page = std::mem::take(&mut new_page);
+        if let Some(last) = st.blocks.last_mut().filter(|b| page && b.before == movements.len()) {
+            last.then_page = true;
+            page = false;
+        }
+        movements.push(Movement { staves, groups, header, page, part: std::mem::take(&mut new_part), at });
     }
-    if let Some(&at) = books.last() {
+    if let Some(&(at, _)) = books.last() {
         return refuse("a \\book block that is never closed", at);
     }
     if movements.is_empty() {
         return refuse("there is no music", 0);
     }
     let first = movements.remove(0);
+    let first_part = first.part;
     let (mut staves, groups) = (first.staves, first.groups);
+    // The scores engraved, by the place each is written at.
+    let mut kept = vec![true];
     for (k, mv) in movements.into_iter().enumerate() {
         // Each movement goes on after the one before, on the same staves.
         let same = mv.staves.len() == staves.len() && mv.staves.iter().zip(&staves).all(|(a, b)| a.kind == b.kind);
+        kept.push(same);
         if !same {
             warn(format!("movement {} is not engraved: its staves are not the first movement's ({} against {})", k + 2, mv.staves.len(), staves.len()), mv.at);
             continue;
@@ -2825,7 +2902,7 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
         let piece = if get("piece").is_empty() { get("title") } else { get("piece") };
         let texts = vec![Words::plain(piece, -1), Words::plain(get("opus"), -1)];
         for (dst, src) in staves.iter_mut().zip(mv.staves) {
-            dst.events.push(Ev { k: Kind::Movement, page: mv.page, texts: texts.clone(), at: mv.at, ..Ev::default() });
+            dst.events.push(Ev { k: Kind::Movement, page: mv.page, part: mv.part, texts: texts.clone(), at: mv.at, ..Ev::default() });
             dst.events.extend(src.events);
             dst.voices.extend(src.voices);
             if src.lyrics.is_some() {
@@ -2845,21 +2922,24 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
             }
         }
     }
-    // The words after the last score go under it; between two scores they are not set.
-    let mut after_words: Vec<String> = Vec::new();
-    let mut after_blocks: Vec<usize> = Vec::new();
-    for (notes, at, lines) in std::mem::take(&mut st.words) {
-        if notes < st.notes || lines.is_empty() {
-            warn("\\markup outside the music is not drawn", at);
-            continue;
-        }
-        if !after_words.is_empty() {
-            after_blocks.push(after_words.len());
-        }
-        after_words.extend(lines);
+    // Each block of words before the score engraved next after it.
+    let mut blocks = std::mem::take(&mut st.blocks);
+    for block in &mut blocks {
+        block.before = kept.iter().take(block.before).filter(|k| **k).count();
     }
-    let mut parsed =
-        Parsed { header: st.header, paper: st.paper, staves, groups, warnings: Vec::new(), spacing: SpacingSpanner::default(), written: crate::written::Written::default(), after_words, after_blocks };
+    let mut parsed = Parsed {
+        header: st.header,
+        paper: st.paper,
+        staves,
+        groups,
+        warnings: Vec::new(),
+        spacing: SpacingSpanner::default(),
+        written: crate::written::Written::default(),
+        blocks,
+        head_after,
+        first_part,
+        part_papers,
+    };
     crate::look::at_start(&mut parsed.staves);
     // What layout gets, counted whole: each staff as long as the longest.
     parsed.written = crate::written::finished(&parsed);
@@ -2879,6 +2959,8 @@ struct Movement {
     groups: Vec<Group>,
     header: HashMap<String, String>,
     page: bool,
+    /// A book part starts with it.
+    part: bool,
     at: usize,
 }
 
@@ -2969,12 +3051,12 @@ fn preamble(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreErr
                 i = layout_block(toks, i, &mut st.paper)?;
             }
             "markup" | "markuplist" => {
-                // Words outside the scores: after the music, set under it
-                // (`parse` says which); a title page before it is not.
+                // Words outside the scores (score #1025): a block of the
+                // page, where it is written — `parse` says before which score.
                 beyond();
-                if t.v == "markup" && st.notes > 0 {
-                    let (lines, j) = words_lines(toks, i + 1, t.at)?;
-                    st.words.push((st.notes, t.at, lines));
+                if t.v == "markup" {
+                    let (markup, j) = crate::markup::read(toks, i + 1, t.at)?;
+                    st.blocks.push(crate::markup::Block { markup, before: 0, page: false, part: false, then_page: false, at: t.at });
                     i = j;
                     continue;
                 }
@@ -3039,7 +3121,7 @@ fn scheme_paper(toks: &[Tok], i: usize, paper: &mut PaperSpec) {
 }
 
 /// A number at `i` — `15`, `-2`, `17.5` — and where it ends.
-fn number_at(toks: &[Tok], mut i: usize) -> Option<(f64, usize)> {
+pub(crate) fn number_at(toks: &[Tok], mut i: usize) -> Option<(f64, usize)> {
     let negative = is(toks, i, T::Sym('-'));
     if negative {
         i += 1;
@@ -6750,7 +6832,7 @@ fn music_glyph(name: &str) -> Option<&'static str> {
 
 /// One item of markup — a word, a string, `{ … }` or a command and what it
 /// takes — onto `runs`, in `weight`.
-fn markup_item(toks: &[Tok], i: usize, weight: Weight, runs: &mut Vec<Run>, at: usize) -> Result<usize, ScoreError> {
+pub(crate) fn markup_item(toks: &[Tok], i: usize, weight: Weight, runs: &mut Vec<Run>, at: usize) -> Result<usize, ScoreError> {
     let _deeper = deeper(at_of(toks, i))?;
     let Some(t) = toks.get(i) else { return refuse("a \\markup that is never finished", at) };
     match t.t {
@@ -6966,97 +7048,6 @@ fn roman_numeral(symbols: &[String], weight: Weight) -> Vec<Run> {
         first.gap = true;
     }
     out
-}
-
-// ---- Words after the music ---------------------------------------------------------
-//
-// A `\markup` written after the score (score #1031): a song's verses under
-// its tune. Its lines are read — each item of a `\column` a line, what is
-// written side by side one line — and set under the last system, at the
-// left, in the text face; sizes, fonts, spaces and a second column beside
-// the first are not: the second's lines follow the first's.
-
-/// The lines of the markup at `i`, just after `\markup`, and the token
-/// after it. Lines of spaces are empty; the empty ones at the end are left out.
-fn words_lines(toks: &[Tok], i: usize, at: usize) -> Result<(Vec<String>, usize), ScoreError> {
-    let mut lines = Vec::new();
-    let mut line = String::new();
-    let j = words_item(toks, i, &mut lines, &mut line, at)?;
-    lines.push(line);
-    let mut lines: Vec<String> = lines.into_iter().map(|l| l.trim_end().to_owned()).collect();
-    while lines.last().is_some_and(String::is_empty) {
-        lines.pop();
-    }
-    crate::written::spend_text(lines.iter().map(|l| crate::written::chars(l)).sum(), at)?;
-    Ok((lines, j))
-}
-
-/// One item of such a markup: onto `line`, or — a column's items — each a
-/// line of `lines`.
-fn words_item(toks: &[Tok], i: usize, lines: &mut Vec<String>, line: &mut String, at: usize) -> Result<usize, ScoreError> {
-    let _deeper = deeper(at_of(toks, i))?;
-    let Some(t) = toks.get(i) else { return refuse("a \\markup that is never finished", at) };
-    let plain = |runs: &[Run]| runs.iter().filter(|r| !r.glyph && !r.text.starts_with(crate::frets::FRET)).map(|r| r.text.as_str()).collect::<Vec<_>>().join(" ");
-    match t.t {
-        T::Sym('{') => {
-            let mut j = i + 1;
-            while j < toks.len() && toks[j].t != T::Sym('}') {
-                j = words_item(toks, j, lines, line, at)?;
-            }
-            if j >= toks.len() {
-                return refuse("a \\markup { that is never closed", at);
-            }
-            Ok(j + 1)
-        }
-        T::Cmd if ["column", "center-column", "left-column", "right-column", "dir-column"].contains(&t.v.as_str()) && is(toks, i + 1, T::Sym('{')) => {
-            if !line.trim().is_empty() {
-                lines.push(std::mem::take(line));
-            }
-            let mut j = i + 2;
-            while j < toks.len() && toks[j].t != T::Sym('}') {
-                let mut runs = Vec::new();
-                j = markup_item(toks, j, Weight::Regular, &mut runs, at)?;
-                lines.push(plain(&runs));
-            }
-            if j >= toks.len() {
-                return refuse("a \\markup { that is never closed", at);
-            }
-            Ok(j + 1)
-        }
-        T::Cmd
-            if matches!(t.v.as_str(), "column" | "line" | "concat" | "fill-line" | "center-align" | "left-align" | "right-align" | "override" | "fontsize" | "abs-fontsize" | "hspace" | "vspace")
-                || matches!(toks.get(i + 1).map(|n| n.t), Some(T::Sym('#'))) =>
-        {
-            // A command that styles or spaces what follows: its Scheme
-            // arguments passed over, the item after it read in its turn.
-            let mut j = i + 1;
-            while is(toks, j, T::Sym('#')) {
-                j = scheme_end(toks, j)?;
-            }
-            if matches!(t.v.as_str(), "hspace" | "vspace") {
-                return Ok(j);
-            }
-            if t.v == "epsfile" {
-                warn("\\epsfile: a picture in a \\markup is not drawn", t.at);
-                return Ok(j);
-            }
-            if toks.get(j).is_none_or(|n| n.t == T::Sym('}')) {
-                return Ok(j);
-            }
-            words_item(toks, j, lines, line, at)
-        }
-        _ => {
-            // Words, or a command that draws them (`\bold`, `\italic` …).
-            let mut runs = Vec::new();
-            let j = markup_item(toks, i, Weight::Regular, &mut runs, at)?;
-            let words = plain(&runs);
-            if !line.is_empty() && !words.is_empty() {
-                line.push(' ');
-            }
-            line.push_str(&words);
-            Ok(j)
-        }
-    }
 }
 
 // ---- Headers and footers --------------------------------------------------------

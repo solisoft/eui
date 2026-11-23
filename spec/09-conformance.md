@@ -1178,6 +1178,35 @@ version 7) and a margin.
   (`a_block_of_words_follows_the_one_before_as_markup_markup_spacing_says`);
   on a page nearly full the words come nearer the music
   (`words_a_page_has_no_room_for_come_nearer_the_music_before_they_leave_it`).
+- **Words outside the scores are blocks of the page** (03 §1.4; score
+  #1025), in `crates/eui-score/tests/markup_flow.rs`: a `\markup` before
+  the first score stands over it, `markup-system-spacing` from its top
+  to the staff's middle line
+  (`words_before_the_first_score_stand_over_it`); one between two scores
+  stands between them, by `score-markup-spacing`, `markup-system-spacing`
+  and `markup-markup-spacing`
+  (`words_between_two_scores_stand_between_them`), and goes on from a
+  page to the next line by line
+  (`words_between_two_scores_flow_from_a_page_to_the_next`); a page of
+  words before a `\pageBreak` or in a `\bookpart` of its own is a title
+  page (`a_page_of_words_before_a_page_break_is_a_title_page`), not
+  spread down its page (`a_title_page_is_not_spread_down_its_page`); a
+  `\pageBreak` goes where it is written
+  (`a_page_break_goes_where_it_is_written_among_words_and_scores`); two
+  columns stand side by side (`two_columns_stand_side_by_side`); faces,
+  sizes, `\concat`, `\super`, `\sub`, `\raise`, `\vspace`
+  (`words_are_drawn_in_their_faces_and_sizes`); `\fill-line`,
+  `\center-column`, `\wordwrap`, `\fromproperty`
+  (`a_fill_line_spreads_its_words_over_the_line`); the titles on the
+  page of the book part they title
+  (`the_titles_stand_on_the_page_of_the_book_part_they_title`); the
+  words in the bands they fall in
+  (`words_between_systems_are_drawn_in_the_bands_they_fall_in`); what
+  is not drawn said, a wrong one refused
+  (`words_count_in_what_a_source_writes_and_a_wrong_one_is_refused`).
+  A book part's own `\paper` — margins, headers, page numbers — in
+  `crates/eui-score/tests/pages.rs`
+  (`a_book_part_s_own_paper_is_its_pages`).
 - **A slur goes round what is under it** (03 §1.4; score #1019), in
   `crates/eui-score/tests/slurs.rs`, measured on the curve as drawn, a
   third of a space of white at least: round an accent next to its note,

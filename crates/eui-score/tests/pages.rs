@@ -270,8 +270,53 @@ fn a_page_break_between_scores_starts_a_page() {
       \pageBreak
       \score { { g'4 a' b' c'' } }
     }"#;
+    // The title page, then a page a score (the words are a page's, score #1025).
     let (eng, _) = engrave_paper(src).unwrap();
-    assert_eq!(eng.pages.len(), 2, "the second score on a page of its own");
+    assert_eq!(eng.pages.len(), 3, "the second score on a page of its own");
+    assert_eq!((eng.pages[0].systems.len(), eng.systems[0].page, eng.systems[1].page), (0, 1, 2));
     let together = src.replacen("\\pageBreak\n      \\score { { g'4", "\\score { { g'4", 1);
-    assert_eq!(engrave_paper(&together).unwrap().0.pages.len(), 1);
+    assert_eq!(engrave_paper(&together).unwrap().0.pages.len(), 2);
+}
+
+#[test]
+fn a_book_part_s_own_paper_is_its_pages() {
+    let has = |pages: &[Vec<String>], k: usize, w: &str| pages[k].iter().any(|x| x == w);
+    let music = ["c'4 d' e' f'"; 3].join(" | ");
+    let own = r#"\paper { top-margin = 40\mm bottom-margin = 50\mm first-page-number = 7 print-first-page-number = ##t
+                 oddHeaderMarkup = \markup \fill-line { "SECOND" \fromproperty #'page:page-number-string }
+                 evenHeaderMarkup = \markup \fill-line { "SECOND" \fromproperty #'page:page-number-string } }"#;
+    let book = |own: &str| {
+        format!(
+            r#"\paper {{ top-margin = 10\mm oddHeaderMarkup = \markup \fill-line {{ "FIRST" }} evenHeaderMarkup = \markup \fill-line {{ "FIRST" }} }}
+               \book {{ \bookpart {{ {{ {music} }} }} \bookpart {{ {own} {{ {music} }} }} \bookpart {{ {{ {music} }} }} }}"#
+        )
+    };
+    let src = book(own);
+    let parsed = parse(&src).unwrap();
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+    // The file's paper is as it was; the second part's is its own, the third's the file's.
+    assert_eq!((parsed.paper.top, parsed.paper.bottom, parsed.paper.first_page_number), (Some(10.0), None, None));
+    assert_eq!(parsed.part_papers.len(), 2);
+    assert_eq!((parsed.part_papers[0].top, parsed.part_papers[0].bottom, parsed.part_papers[0].first_page_number), (Some(40.0), Some(50.0), Some(7)));
+    assert_eq!((parsed.part_papers[1].top, parsed.part_papers[1].first_page_number), (Some(10.0), None));
+    // Its margins: its music thirty millimetres lower than the same part without them.
+    let (eng, paper) = engrave_paper(&src).unwrap();
+    let (plain, _) = engrave_paper(&book("")).unwrap();
+    assert_eq!(eng.pages.iter().map(|p| (p.part, p.part_first)).collect::<Vec<_>>(), [(0, true), (1, true), (2, true)]);
+    let space = 25.4 * paper.pt / 72.0;
+    assert!((eng.systems[1].top - plain.systems[1].top - 30.0 / space).abs() < 1e-6, "{} {}", eng.systems[1].top, plain.systems[1].top);
+    assert!((eng.systems[0].top - plain.systems[0].top).abs() < 1e-6 && (eng.systems[2].top - plain.systems[2].top).abs() < 1e-6);
+    // Its bottom margin: a part that fills its pages ends them higher.
+    let long = ["c'4 d' e' f' \\break"; 40].join(" ");
+    let tall = |own: &str| engrave_paper(&format!("\\book {{ \\bookpart {{ {{ c'1 }} }} \\bookpart {{ {own} {{ {long} }} }} }}")).unwrap().0;
+    let (roomy, tight) = (tall(""), tall("\\paper { bottom-margin = 120\\mm }"));
+    assert!(tight.pages.len() > roomy.pages.len());
+    let floor = paper.h - 120.0 / space;
+    assert!(tight.systems.iter().filter(|s| s.page > 0).all(|s| s.bottom <= floor + 1e-6));
+    // Its headers and its page numbers, on its pages only.
+    let pages = page_words(&pdf(&src, "").unwrap());
+    assert_eq!(pages.len(), 3);
+    assert!(has(&pages, 0, "FIRST") && !has(&pages, 0, "SECOND"), "{:?}", pages[0]);
+    assert!(has(&pages, 1, "SECOND") && has(&pages, 1, "7") && !has(&pages, 1, "FIRST"), "{:?}", pages[1]);
+    assert!(has(&pages, 2, "FIRST") && !has(&pages, 2, "SECOND"), "{:?}", pages[2]);
 }

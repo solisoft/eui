@@ -287,8 +287,12 @@ pub struct System {
 pub struct Page {
     /// From 0.
     pub index: usize,
-    /// Its systems, by index.
+    /// Its systems, by index; none on a page of words alone, a title page.
     pub systems: Vec<usize>,
+    /// The book part it is a page of, from 0 (`\bookpart`; score #1025).
+    pub part: usize,
+    /// A book part starts on it.
+    pub part_first: bool,
 }
 
 /// A score laid out.
@@ -306,6 +310,9 @@ pub struct Engraved {
     pub left: f64,
     /// The titles.
     pub header: HeadBlock,
+    /// The page the titles are on: the first, unless title pages of words
+    /// alone come before the book part they title (score #1025).
+    pub head_page: usize,
     /// The pages.
     pub pages: Vec<Page>,
     /// The paper's height, on paper.
@@ -317,96 +324,93 @@ pub struct Engraved {
     pub groups: Vec<Group>,
     /// The room a page's header takes over the titles (`Layout::head_room`).
     pub head_room: f64,
-    /// The words written after the music (score #1031), a line each, where
-    /// each is set.
+    /// The words written outside the music — before the first score,
+    /// between two, after the last (score #1031, #1025) — each piece of one
+    /// face where it is set, from the top of the first page down.
     pub after: Vec<AfterWords>,
 }
 
-/// A line of the words after the music.
+/// Words written outside the music, of one face and one size, where they
+/// are set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AfterWords {
-    /// The line.
+    /// The words.
     pub text: String,
-    /// Where it starts.
+    /// Their face.
+    pub weight: Weight,
+    /// Their em.
+    pub em: f64,
+    /// Where they start.
     pub x: f64,
-    /// Its baseline, from the top of its page.
+    /// Their baseline, from the top of their page.
     pub y: f64,
-    /// The page it is on.
+    /// The page they are on.
     pub page: usize,
 }
 
-/// The size of the words after the music: the text's own.
-pub(crate) fn after_em() -> f64 {
-    em(0.0)
+/// From the top of a block of words to its first baseline when it starts
+/// a page, as far as a line is from the next: LilyPond's `baseline-skip`.
+const AFTER_STEP: f64 = crate::markup::BASELINE_SKIP;
+
+/// The blocks of words the page stacker sets among the systems (score
+/// #1025): each `\markup` written outside the music, laid out on the
+/// line's width and cut into rows.
+pub(crate) struct Flow<'a> {
+    /// Each block, and its rows.
+    blocks: Vec<(&'a crate::markup::Block, Vec<crate::markup::Row>)>,
+    /// How many of them the titles follow.
+    head_after: usize,
+    /// The first score starts a book part.
+    first_part: bool,
+    /// Where a line starts.
+    left: f64,
+    /// Each book part's top and bottom margins, over the layout's.
+    margins: Vec<(f64, f64)>,
 }
 
-/// From one baseline of the words after the music to the next: LilyPond's
-/// `baseline-skip`, three staff spaces.
-const AFTER_STEP: f64 = 3.0;
+impl<'a> Flow<'a> {
+    /// The words of `parsed` on lines `width` wide starting at `left`.
+    fn of(parsed: &'a Parsed, width: f64, left: f64, layout: &Layout) -> Self {
+        let blocks = parsed.blocks.iter().map(|b| (b, crate::markup::rows(&b.markup, width, &parsed.header))).collect();
+        // A book part's own margins, on paper: how far from the file's.
+        let mut margins = vec![(0.0, 0.0)];
+        let whole = crate::Paper::of(&parsed.paper);
+        for spec in &parsed.part_papers {
+            let own = crate::Paper::of(&crate::parse::PaperSpec { staff_size: parsed.paper.staff_size, size: parsed.paper.size.clone(), ..spec.clone() });
+            margins.push(if layout.page_h.is_some() && layout.top.is_some() { (own.top - whole.top, own.bottom - whole.bottom) } else { (0.0, 0.0) });
+        }
+        Flow { blocks, head_after: parsed.head_after, first_part: parsed.first_part, left, margins }
+    }
+}
 
-/// The words after the music (`Parsed::after_words`), set under the last
-/// system, a block after the other, a block's lines every [`AFTER_STEP`].
-/// As LilyPond spaces them (score #1025): the first block's top
-/// `score-markup-spacing` under the middle line of the last system's
-/// staff — its basic distance, and its padding clear of the music's ink —
-/// and each block's top `markup-markup-spacing` under the top of the one
-/// before, its padding clear of that one's last line. On a screen the
-/// score is that much taller; on paper, words the page has no room for
-/// that far from the music come nearer it, down to the padding, and a
-/// line that still does not fit starts the next page —
-/// `top-markup-spacing` under its top.
-fn place_after(eng: &mut Engraved, parsed: &Parsed, layout: &Layout, opts: &Opts) {
-    use crate::breaking::rest_length;
-    use crate::text::{ASCENT, DESCENT};
-    if parsed.after_words.is_empty() {
-        return;
-    }
-    let (ascent, descent) = (ASCENT * after_em(), DESCENT * after_em());
-    let mut page = eng.pages.len().saturating_sub(1);
-    let last = eng.systems.iter().filter(|s| s.page == page).max_by(|a, b| a.bottom.total_cmp(&b.bottom));
-    let (bottom, middle) = last.map_or((0.0, 0.0), |s| (s.bottom, s.top + last_offset(s) + 2.0));
-    let floor = layout.page_h.map(|h| h - layout.bottom.unwrap_or(0.0));
-    let head = layout.top.unwrap_or(0.0) + AFTER_STEP + opts.top_markup_drop();
-    // Each line's baseline from the first block's top.
-    let between = &opts.markup_markup;
-    let mut downs: Vec<f64> = Vec::with_capacity(parsed.after_words.len());
-    let (mut top, mut y) = (0.0, ascent);
-    for k in 0..parsed.after_words.len() {
-        if parsed.after_blocks.contains(&k) {
-            top = (top + rest_length(between)).max(y + descent + between.padding);
-            y = top + ascent;
-        } else if k > 0 {
-            y += AFTER_STEP;
+/// What the page stacker sets: a system, or a row of a block of words.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Item {
+    System(usize),
+    /// The block, and its row.
+    Row(usize, usize),
+}
+
+/// The pages, and the words on them.
+struct Stacked {
+    pages: Vec<Page>,
+    words: Vec<AfterWords>,
+    /// The page the titles are on.
+    head_page: usize,
+    /// Where the words' ink ends, on a screen.
+    bottom: f64,
+}
+
+impl Stacked {
+    /// Into `eng`, whose systems it placed.
+    fn into(self, eng: &mut Engraved, layout: &Layout) {
+        eng.pages = self.pages;
+        eng.after = self.words;
+        eng.head_page = self.head_page;
+        if layout.page_h.is_none() && !eng.after.is_empty() {
+            // On a screen the score is as tall as its words.
+            eng.height = eng.height.max(self.bottom - crate::text::DESCENT * em(0.0) + 1.5);
         }
-        downs.push(y);
-    }
-    let tall = y + descent;
-    // Where the first block's top is: as far under the music as the
-    // spacing says, nearer where the page ends sooner.
-    let clear = bottom + opts.score_markup.padding;
-    let far = (middle + rest_length(&opts.score_markup)).max(clear);
-    let near = (middle + opts.score_markup.min).max(clear);
-    let start = match floor {
-        Some(f) if far + tall > f && near + tall <= f => f - tall,
-        _ => far,
-    };
-    // A line past the page's foot starts the next page, the lines after it
-    // as far under it as they were.
-    let mut shift = start;
-    for (text, down) in parsed.after_words.iter().zip(&downs) {
-        let mut y = shift + down;
-        if floor.is_some_and(|f| y > f && y > head) {
-            page += 1;
-            eng.pages.push(Page { index: page, systems: Vec::new() });
-            shift = head - down;
-            y = head;
-        }
-        if !text.is_empty() {
-            eng.after.push(AfterWords { text: text.clone(), x: eng.left, y, page });
-        }
-    }
-    if layout.page_h.is_none() {
-        eng.height = eng.height.max(shift + tall - descent + 1.5);
     }
 }
 
@@ -2251,39 +2255,121 @@ fn ink_need(spec: &Spec, boxed: f64, skylines: impl FnOnce() -> Option<f64>) -> 
     skylines().map_or(0.0, |d| d + spec.padding)
 }
 
-fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &HeadBlock, opts: &Opts, inner: &[Vec<Spring>]) -> Vec<Page> {
+/// The page stacker: the systems and the blocks of words (`flow`), one
+/// under the other in the order they are written, cut into pages.
+fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &HeadBlock, opts: &Opts, inner: &[Vec<Spring>], flow: &Flow) -> Stacked {
     let page_h = layout.page_h;
-    let margin = layout.top.unwrap_or(0.0);
-    let floor_y = page_h.map_or(0.0, |h| h - layout.bottom.unwrap_or(0.0));
     let titled = !head.lines.is_empty();
-    let n = systems.len();
-    let reaches: Vec<(f64, f64)> = systems.iter().map(|sys| system_reach(sys, staves)).collect();
+    let first_bar = |sys: &System| staves[0].get(sys.lines[0].bars.start);
     let last_bar = |sys: &System| staves[0].get(sys.lines[0].bars.end - 1);
-    // A \pageBreak at the end of a system: the next starts a page; a
-    // \noPageBreak: it does not.
-    let forced: Vec<bool> = systems.iter().map(|sys| last_bar(sys).is_some_and(|b| b.brk.as_deref() == Some("page"))).collect();
-    let keep: Vec<bool> = systems.iter().map(|sys| last_bar(sys).is_some_and(|b| b.no_page_break)).collect();
     // A movement starts with it: the room between two scores.
-    let fresh: Vec<bool> = systems.iter().map(|sys| staves[0].get(sys.lines[0].bars.start).is_some_and(|b| b.fresh)).collect();
+    let fresh: Vec<bool> = systems.iter().map(|sys| first_bar(sys).is_some_and(|b| b.fresh)).collect();
+    // What is stacked: each block of words before the score it is written
+    // before, row by row; those after the last score at the end.
+    let mut items: Vec<Item> = Vec::new();
+    {
+        let mut next = 0;
+        let mut rows_before = |score: Option<usize>, items: &mut Vec<Item>| {
+            while let Some((_, rows)) = flow.blocks.get(next).filter(|(b, _)| score.is_none_or(|m| b.before <= m)) {
+                items.extend((0..rows.len()).map(|r| Item::Row(next, r)));
+                next += 1;
+            }
+        };
+        let mut score = 0;
+        for (k, is_fresh) in fresh.iter().enumerate() {
+            if k > 0 && *is_fresh {
+                score += 1;
+            }
+            if k == 0 || *is_fresh {
+                rows_before(Some(score), &mut items);
+            }
+            items.push(Item::System(k));
+        }
+        rows_before(None, &mut items);
+    }
+    let n = items.len();
+    let row = |i: usize| match items[i] {
+        Item::Row(b, r) => flow.blocks.get(b).and_then(|(block, rows)| rows.get(r).map(|row| (*block, row, r + 1 == rows.len()))),
+        Item::System(_) => None,
+    };
+    let system = |i: usize| match items[i] {
+        Item::System(k) => Some(k),
+        Item::Row(..) => None,
+    };
+    // Each item's ink above its top — a system's first staff's top line, a
+    // row's own — and below it.
+    let reaches: Vec<(f64, f64)> = (0..n)
+        .map(|i| match (system(i), row(i)) {
+            (Some(k), _) => system_reach(&systems[k], staves),
+            (_, Some((_, row, _))) => (0.0, row.bottom - row.top),
+            _ => (0.0, 0.0),
+        })
+        .collect();
+    // A \pageBreak after an item — at the end of a system, or written
+    // between the scores and the words: the next starts a page; a
+    // \noPageBreak: it does not.
+    let starts_page = |i: usize| matches!(items[i], Item::Row(_, 0)) && row(i).is_some_and(|(block, _, _)| block.page);
+    let forced: Vec<bool> = (0..n)
+        .map(|i| {
+            let own = match (system(i), row(i)) {
+                (Some(k), _) => last_bar(&systems[k]).is_some_and(|b| b.brk.as_deref() == Some("page")),
+                (_, Some((block, _, last))) => last && block.then_page,
+                _ => false,
+            };
+            own || (i + 1 < n && starts_page(i + 1))
+        })
+        .collect();
+    let keep: Vec<bool> = (0..n).map(|i| system(i).is_some_and(|k| last_bar(&systems[k]).is_some_and(|b| b.no_page_break))).collect();
+    // The book part each item is in: one starts with a block of words, or
+    // with a score.
+    let part_first: Vec<bool> = (0..n)
+        .map(|i| match (system(i), row(i)) {
+            (Some(0), _) => flow.first_part,
+            (Some(k), _) => first_bar(&systems[k]).is_some_and(|b| b.fresh && b.part),
+            (_, Some((block, _, _))) => block.part && matches!(items[i], Item::Row(_, 0)),
+            _ => false,
+        })
+        .collect();
+    let mut part_of: Vec<usize> = Vec::with_capacity(n);
+    for first in &part_first {
+        part_of.push(part_of.last().copied().unwrap_or(0) + usize::from(*first));
+    }
+    // The page's margins: its book part's.
+    let own = |i: usize| part_of.get(i).and_then(|p| flow.margins.get(*p)).copied().unwrap_or((0.0, 0.0));
+    let margin = |i: usize| layout.top.unwrap_or(0.0) + own(i).0;
+    let floor_y = |i: usize| page_h.map_or(0.0, |h| h - layout.bottom.unwrap_or(0.0) - own(i).1);
+    // The item the titles stand over: the first, unless title pages come
+    // before the book part they title. On a screen, which has one page,
+    // the first.
+    let head_item = if page_h.is_some() { (0..n).find(|&i| !matches!(items[i], Item::Row(b, _) if b < flow.head_after)).unwrap_or(0) } else { 0 };
     // Each system's last staff from its first, at the staves' natural
     // distances, and its ink under that staff's top line: LilyPond measures
     // the room between two systems from the middle line of the one's last
     // staff to the middle line of the other's first.
-    let last_off: Vec<f64> = systems.iter().map(|sys| sys.offsets.last().copied().unwrap_or(0.0)).collect();
-    let below: Vec<f64> = (0..n).map(|k| reaches[k].1 - last_off[k]).collect();
+    let last_off: Vec<f64> = (0..n).map(|i| system(i).map_or(0.0, |k| systems[k].offsets.last().copied().unwrap_or(0.0))).collect();
+    let below: Vec<f64> = (0..n).map(|i| reaches[i].1 - last_off[i]).collect();
     let no_springs: Vec<Spring> = Vec::new();
-    let inner_of = |k: usize| inner.get(k).unwrap_or(&no_springs);
-    let inner_nat: Vec<f64> = (0..n).map(|k| inner_of(k).iter().map(|s| s.natural).sum()).collect();
-    let inner_min: Vec<f64> = (0..n).map(|k| inner_of(k).iter().map(|s| s.min).sum()).collect();
-    // Where a page's music may start: the first page's under its titles, a
-    // later one's under its number.
-    let head_y = |k: usize| {
-        if k > 0 {
-            margin + 3.5
-        } else if titled {
-            margin + head.bottom + if page_h.is_none() { 1.0 } else { 0.0 }
+    let inner_of = |i: usize| system(i).and_then(|k| inner.get(k)).unwrap_or(&no_springs);
+    let inner_nat: Vec<f64> = (0..n).map(|i| inner_of(i).iter().map(|s| s.natural).sum()).collect();
+    let inner_min: Vec<f64> = (0..n).map(|i| inner_of(i).iter().map(|s| s.min).sum()).collect();
+    // Where a page's music may start: under the titles, on a later page
+    // under its number; and where its words start, when it starts with
+    // words: half a space under the titles' ink (`markup-markup-spacing`'s
+    // padding), else as `top-markup-spacing` says.
+    let head_y = |i: usize| {
+        let under_titles = titled && i == head_item;
+        if system(i).is_none() {
+            if under_titles {
+                margin(i) + head.bottom - crate::text::TITLE_PAD + opts.markup_markup.padding
+            } else {
+                margin(i) + AFTER_STEP - crate::text::ASCENT * em(0.0) + opts.top_markup_drop()
+            }
+        } else if under_titles {
+            margin(i) + head.bottom + if page_h.is_none() { 1.0 } else { 0.0 }
+        } else if i > 0 {
+            margin(i) + 3.5
         } else {
-            margin - 0.5
+            margin(i) - 0.5
         }
     };
     // The springs: from where a page's music starts to its first system's
@@ -2292,19 +2378,26 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
     // top line to the bottom margin (`last-bottom-spacing`); between two
     // systems (`system-system-spacing`, `score-system-spacing` where a
     // movement starts) — never shorter than their ink and padding allow.
+    // Words are measured from their top: a row starts where the page does
+    // and ends where its ink does, the room under it the page's to stretch.
     let to_top_line = |s: Spec, by: f64| Spec { basic: s.basic + by, min: s.min + by, ..s };
     let tops: Vec<Spring> = (0..n)
-        .map(|k| {
-            let spec = if k == 0 && titled { opts.markup } else { opts.top };
-            to_top_line(spec, -2.0).spring(spec.padding - reaches[k].0)
+        .map(|i| {
+            if system(i).is_none() {
+                return Spring::rigid(0.0);
+            }
+            let spec = if i == head_item && titled { opts.markup } else { opts.top };
+            to_top_line(spec, -2.0).spring(spec.padding - reaches[i].0)
         })
         .collect();
-    let bottoms: Vec<Spring> = (0..n).map(|k| to_top_line(opts.bottom, 2.0).spring(below[k] + opts.bottom.padding)).collect();
+    let bottoms: Vec<Spring> = (0..n)
+        .map(|i| if system(i).is_some() { to_top_line(opts.bottom, 2.0).spring(below[i] + opts.bottom.padding) } else { Spring { stretch: opts.bottom.stretch.max(0.0), ..Spring::rigid(below[i]) } })
+        .collect();
     let first_drawn = |sys: &System| (0..sys.lines.len()).find(|&s| !sys.lines[s].hidden).unwrap_or(0);
     let last_drawn = |sys: &System| (0..sys.lines.len()).rev().find(|&s| !sys.lines[s].hidden).unwrap_or(0);
     // Each system's skylines, drawn once when a distance needs them: its
     // first staff's and its last's.
-    let mut skies: Vec<[Option<std::rc::Rc<Skyline>>; 2]> = vec![[None, None]; n];
+    let mut skies: Vec<[Option<std::rc::Rc<Skyline>>; 2]> = vec![[None, None]; systems.len()];
     let mut sky = |k: usize, last: bool| -> std::rc::Rc<Skyline> {
         let sys = &systems[k];
         let s = if last { last_drawn(sys) } else { first_drawn(sys) };
@@ -2319,22 +2412,46 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
         skies[k][usize::from(last)] = Some(made.clone());
         made
     };
+    // From an item's top (a system's last staff's top line) to the next's.
+    // Words: `score-markup-spacing` from a system's middle line to their
+    // top; `markup-system-spacing` from a block's top to the next system's
+    // middle line; `markup-markup-spacing` from a block's top to the
+    // next's; a block's rows where it has them.
     let mut gaps: Vec<Spring> = Vec::with_capacity(n);
-    for k in 0..n {
-        if k == 0 {
+    for i in 0..n {
+        if i == 0 {
             gaps.push(Spring::rigid(0.0));
             continue;
         }
-        let spec = if fresh[k] { opts.score } else { opts.system };
-        let boxed = below[k - 1] + spec.padding - reaches[k].0;
-        gaps.push(spec.spring(ink_need(&spec, boxed, || sky(k - 1, true).clear_of(&sky(k, false)))));
+        let gap = match (items[i - 1], items[i]) {
+            (Item::System(a), Item::System(k)) => {
+                let spec = if fresh[k] { opts.score } else { opts.system };
+                let boxed = below[i - 1] + spec.padding - reaches[i].0;
+                spec.spring(ink_need(&spec, boxed, || sky(a, true).clear_of(&sky(k, false))))
+            }
+            (Item::System(_), Item::Row(..)) => to_top_line(opts.score_markup, 2.0).spring(below[i - 1] + opts.score_markup.padding),
+            (Item::Row(a, _), _) => {
+                // The row before's top, from its block's.
+                let down = row(i - 1).map_or(0.0, |(_, row, _)| row.top);
+                match items[i] {
+                    Item::Row(b, _) if a == b => Spring::rigid(row(i).map_or(0.0, |(_, row, _)| row.top) - down),
+                    Item::Row(..) => to_top_line(opts.markup_markup, -down).spring(below[i - 1] + opts.markup_markup.padding),
+                    Item::System(_) => to_top_line(opts.markup, -2.0 - down).spring(below[i - 1] + opts.markup.padding - reaches[i].0),
+                }
+            }
+        };
+        gaps.push(gap);
     }
     // `systems-per-page`, `max-systems-per-page`: a page holds no more, and
     // a system that would not fit still starts the next one.
     let per_page = layout.systems_per_page.into_iter().chain(opts.max_per_page).min().unwrap_or(usize::MAX).max(1);
-    // A page of systems i..=j: the room its springs have, and their lengths
+    let mut systems_to: Vec<usize> = vec![0];
+    for i in 0..n {
+        systems_to.push(systems_to[i] + usize::from(system(i).is_some()));
+    }
+    // A page of items i..=j: the room its springs have, and their lengths
     // natural and least.
-    let room = |i: usize| floor_y - head_y(i);
+    let room = |i: usize| floor_y(i) - head_y(i);
     let sums = |i: usize, j: usize| {
         let mut natural = tops[i].natural + bottoms[j].natural;
         let mut least = tops[i].min + bottoms[j].min;
@@ -2350,11 +2467,11 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
     };
     let starts = match page_h {
         Some(_) => {
-            // How badly systems i..=j fill a page: none where they do not go
+            // How badly items i..=j fill a page: none where they do not go
             // on one, even squeezed; else how empty it is left, or how far
             // its springs are squeezed towards their least.
             let fits = |i: usize, j: usize| -> Option<f64> {
-                if j + 1 - i > per_page {
+                if systems_to[j + 1] - systems_to[i] > per_page {
                     return None;
                 }
                 let (natural, least) = sums(i, j);
@@ -2369,12 +2486,14 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
             match counted {
                 Some(starts) => starts,
                 None if layout.even_pages => page_starts(n, &forced, &keep, fits),
-                None => filled_starts(n, &forced, &keep, per_page, !opts.minimal, |i, j| fits(i, j).is_some()),
+                None => filled_starts(n, &forced, &keep, per_page, !opts.minimal, |i, j| fits(i, j).is_some(), |i| system(i).is_some()),
             }
         }
         None => vec![0],
     };
     let mut pages: Vec<Page> = Vec::new();
+    let mut words: Vec<AfterWords> = Vec::new();
+    let (mut head_page, mut words_bottom) = (0, 0.0_f64);
     for (pi, &i) in starts.iter().enumerate() {
         let j = starts.get(pi + 1).map_or(n, |&next| next).max(i + 1).min(n) - 1;
         if i >= n {
@@ -2382,8 +2501,9 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
         }
         // The page's springs and the force that fills it: squeezed where
         // its systems need it, stretched down the page unless it is ragged
-        // (`ragged-bottom`; the last page's unless `ragged-last-bottom = ##f`).
-        let last_page = j + 1 == n;
+        // (`ragged-bottom`; the last page's — a book part's last too, as
+        // LilyPond's — unless `ragged-last-bottom = ##f`).
+        let last_page = j + 1 == n || part_first[j + 1];
         let stretch = page_h.is_some() && !opts.ragged_bottom && (!last_page || opts.fill_last);
         let force = if page_h.is_some() {
             let mut chain: Vec<Spring> = vec![tops[i], bottoms[j]];
@@ -2396,11 +2516,24 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
             0.0
         };
         let mut y = head_y(i) + tops[i].at(force);
-        let mut page = Page { index: pages.len(), systems: Vec::new() };
-        for k in i..=j {
-            if k > i {
-                y += last_offset(&systems[k - 1]) + gaps[k].at(force);
+        let mut page = Page { index: pages.len(), systems: Vec::new(), part: part_of[i], part_first: pages.is_empty() || part_first[i] };
+        if (i..=j).contains(&head_item) {
+            head_page = page.index;
+        }
+        // The item before's last staff's top line, from its top.
+        let mut offset = 0.0;
+        for it in i..=j {
+            if it > i {
+                y += offset + gaps[it].at(force);
             }
+            offset = 0.0;
+            if let Some((_, row, _)) = row(it) {
+                for p in &row.pieces {
+                    words.push(AfterWords { text: p.text.clone(), weight: p.weight, em: p.em, x: flow.left + p.x, y: y + p.y - row.top, page: page.index });
+                }
+                words_bottom = words_bottom.max(y + below[it]);
+            }
+            let Some(k) = system(it) else { continue };
             let sys = &mut systems[k];
             if let Some(springs) = inner.get(k).filter(|v| !v.is_empty()) {
                 let mut offsets = Vec::with_capacity(springs.len() + 1);
@@ -2409,18 +2542,19 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
                     offsets.push(offsets[offsets.len() - 1] + s.at(force));
                 }
                 sys.offsets = offsets;
-                sys.reach = Some((reaches[k].0, last_offset(sys) + below[k]));
+                sys.reach = Some((reaches[it].0, last_offset(sys) + below[it]));
             }
             sys.top = y;
-            sys.bottom = y + last_offset(sys) + below[k];
-            sys.reach_hi = reaches[k].0;
+            sys.bottom = y + last_offset(sys) + below[it];
+            sys.reach_hi = reaches[it].0;
             sys.page = page.index;
+            offset = last_offset(sys);
             page.systems.push(k);
         }
         pages.push(page);
     }
     if pages.is_empty() {
-        pages.push(Page { index: 0, systems: Vec::new() });
+        pages.push(Page { index: 0, part_first: true, ..Page::default() });
     }
     for sys in systems.iter_mut() {
         if !sys.multi {
@@ -2432,7 +2566,7 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
             line.page = page;
         }
     }
-    pages
+    Stacked { pages, words, head_page, bottom: words_bottom }
 }
 
 /// A system's last staff's top line, from its first's.
@@ -2445,13 +2579,16 @@ fn last_offset(sys: &System) -> f64 {
 /// unless a `\noPageBreak` keeps it with the one before, and the page is cut
 /// where it may be, earlier. A last page left with one system takes the one
 /// before it too, when the page before keeps two or more and the last has
-/// the room. `fits(i, j)`: systems i..=j go on one page.
-fn filled_starts(n: usize, forced: &[bool], keep: &[bool], per_page: usize, no_lone: bool, fits: impl Fn(usize, usize) -> bool) -> Vec<usize> {
+/// the room. `fits(i, j)`: systems i..=j go on one page. The words among
+/// them (`is_system` says which are not) are cut like them, row by row, but
+/// are no system of `per_page`, nor a lone one to keep company.
+fn filled_starts(n: usize, forced: &[bool], keep: &[bool], per_page: usize, no_lone: bool, fits: impl Fn(usize, usize) -> bool, is_system: impl Fn(usize) -> bool) -> Vec<usize> {
     let mut starts = vec![0];
     let mut si = 1;
     while si < n {
         let page = starts.last().copied().unwrap_or(0);
-        let full = si - page >= per_page;
+        // Words go on a page that has its systems; a system past them does not.
+        let full = is_system(si) && (page..si).filter(|&k| is_system(k)).count() >= per_page;
         if forced[si - 1] || full || !fits(page, si) {
             // Cut where a page may end: here, or the nearest earlier.
             let at = (page + 1..=si).rev().find(|&k| forced[k - 1] || !keep[k - 1]).unwrap_or(si);
@@ -2462,7 +2599,7 @@ fn filled_starts(n: usize, forced: &[bool], keep: &[bool], per_page: usize, no_l
     }
     // Not a lone system on the last page, where the one before can join it.
     if let [.., before, last] = starts[..] {
-        if no_lone && n - last == 1 && last - before >= 3 && !forced[last - 1] && !keep[last - 2] && per_page >= 2 && fits(last - 1, n - 1) {
+        if no_lone && n - last == 1 && last - before >= 3 && !forced[last - 1] && !keep[last - 2] && per_page >= 2 && is_system(n - 1) && is_system(last - 1) && fits(last - 1, n - 1) {
             if let Some(l) = starts.last_mut() {
                 *l = last - 1;
             }
@@ -2534,14 +2671,12 @@ fn system_reach(sys: &System, staves: &[Vec<Bar>]) -> (f64, f64) {
 
 pub(crate) fn engrave_parsed(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved, ScoreError> {
     let opts = Opts::of(layout, &parsed.paper);
-    let mut eng = crate::breaking::with_durations(&parsed.spacing, || {
+    crate::breaking::with_durations(&parsed.spacing, || {
         if parsed.staves.len() > 1 {
             return engrave_many(parsed, width, layout, &opts);
         }
         engrave_one(parsed, width, layout, &opts)
-    })?;
-    place_after(&mut eng, parsed, layout, &opts);
-    Ok(eng)
+    })
 }
 
 fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) -> Result<Engraved, ScoreError> {
@@ -2592,22 +2727,22 @@ fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) ->
     let head = header_lines(&parsed.header, width).lowered(opts.top_markup_drop());
     let mut systems: Vec<System> = lines.into_iter().map(|line| System { left: line.left, right: line.right, lines: vec![line], ..System::default() }).collect();
     let staves = vec![bars];
-    let pages = stack(&mut systems, &staves, layout, &head, opts, &[]);
+    let stacked = stack(&mut systems, &staves, layout, &head, opts, &[], &Flow::of(parsed, width, left, layout));
     let bottom = systems.iter().fold(0.0, |acc: f64, s| acc.max(s.bottom));
-    Ok(Engraved {
+    let mut eng = Engraved {
         staves,
         systems,
         height: bottom + 1.0,
         width,
         left,
         header: head,
-        pages,
         paper: layout.page_h,
         numbered: layout.page_h.is_some() && layout.top.is_some(),
-        groups: Vec::new(),
         head_room: layout.head_room,
-        after: Vec::new(),
-    })
+        ..Engraved::default()
+    };
+    stacked.into(&mut eng, layout);
+    Ok(eng)
 }
 
 /// The first movement's title, `piece` and `opus` of the header, over the
@@ -2903,7 +3038,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
     }
     let inner: Vec<Vec<Spring>> = systems.iter_mut().map(|o| stack_staves(o, &all, &parsed.groups, staves_src)).collect();
     let head = header_lines(&parsed.header, width).lowered(opts.top_markup_drop());
-    let pages = stack(&mut systems, &all, layout, &head, opts, &inner);
+    let stacked = stack(&mut systems, &all, layout, &head, opts, &inner, &Flow::of(parsed, width, left, layout));
     // The staves where the page put them: what joins them drawn there.
     for o in &mut systems {
         connect(o, &parsed.groups);
@@ -2919,20 +3054,21 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
         }
         bottom = bottom.max(o.bottom);
     }
-    Ok(Engraved {
+    let mut eng = Engraved {
         staves: all,
         systems,
         height: bottom + 1.0,
         width,
         left,
         header: head,
-        pages,
         paper: layout.page_h,
         numbered: layout.page_h.is_some() && layout.top.is_some(),
         groups: parsed.groups.clone(),
         head_room: layout.head_room,
-        after: Vec::new(),
-    })
+        ..Engraved::default()
+    };
+    stacked.into(&mut eng, layout);
+    Ok(eng)
 }
 
 /// The name left of a staff on the system that starts `tick` into it

@@ -670,11 +670,43 @@ construct as LilyPond 2.25 draws it:
   name is one of LilyPond's and not the one playing, and each note
   sounds as far from where it is written as `\transposition` says by
   then. A drum staff is not transposed. A staff alone has no name drawn.
-  A `\markup` after the last score — a song's verses — is set under the
-  last system: each item of a `\column` a line, at the left, three staff
-  spaces from baseline to baseline, a line the page has no room for on
-  the next; its fonts, sizes and spaces are not read, and one before the
-  music or between two scores is passed over with a warning.
+  A `\markup` written outside the scores is a block of the page, as a
+  system is (score #1031, #1025): before the first score, between two,
+  after the last — a song's verses under its tune — in the order they
+  are written, and from a page to the next where the page ends, cut
+  between two lines of words. It is laid out as LilyPond's markup
+  commands lay it out: what is written side by side (`{ … }`, `\line`)
+  on one baseline, a word space apart, `\concat`'s pieces touching;
+  the items of a `\column` (`\center-column`, `\right-column`) one
+  under the other, three staff spaces from baseline to baseline or as
+  far as their ink needs; two columns written side by side stand side by
+  side; a `\fill-line` spreads its items over the line — one centred,
+  two at the ends, more with the middle ones evenly between;
+  `\wordwrap` and `\justify` break their words where the line ends;
+  `\hspace` and `\vspace` make room, `\raise` and `\lower` move;
+  `\bold`, `\italic` and `\upright` set the face; `\fontsize #n`
+  (which spaces the lines with it), `\abs-fontsize`, `\magnify`,
+  `\teeny` … `\huge`, `\smaller` and `\larger` the size; `\super`
+  and `\sub` raise and lower, smaller; `\center-align`,
+  `\left-align`, `\right-align` and `\halign` align;
+  `\fromproperty #'header:…` is the header's field. A font's name, a
+  colour, a box and a rotation are read and not drawn; a picture, a
+  music glyph, a chord diagram and a `\markuplist` are passed over
+  with a warning.
+  A `\pageBreak` written between two of them — two scores, a score and
+  words, two blocks of words — starts a page there, and so does a
+  `\bookpart` after the first: a page of words before one is a title
+  page, with no system on it. The titles (`\header`) stand at the top
+  of the first page, over the words written before the first score —
+  or, where the book parts before the one whose header says them are
+  title pages, at the top of that part's first page. A book part's
+  last page is ragged as the last of all is (`ragged-last-bottom`).
+  A `\bookpart`'s own `\paper` is its pages': its `top-margin` and
+  `bottom-margin`, its headers and footers, and `first-page-number`
+  (its pages counted from it), `print-page-number` and
+  `print-first-page-number`; the parts after it take the file's again.
+  Its `left-margin`, `right-margin`, `line-width` and `indent` are
+  every part's, as the line breaker has one width — said in a warning.
   The room around what is not music is `\paper`'s (score #1025), each
   spacing by its `basic-distance`, its `minimum-distance` where that is
   the greater, and its `padding`, measured as LilyPond measures them — a
@@ -689,15 +721,21 @@ construct as LilyPond 2.25 draws it:
   staff, the padding at least under its ink; on a page with no room for
   the words that far down, as near the music as lets them end at the
   page's foot, the padding and the least distance kept. Each `\markup`
-  after the first is a block: `markup-markup-spacing` (1, 0, padding
+  after another is a block: `markup-markup-spacing` (1, 0, padding
   0.5) from the top of the one before to its own, the padding under that
-  one's last line. `stretchability` is not read for these three: the
-  words are not spread down a page.
+  one's last line. `markup-system-spacing` (5, 0, padding 0.5) is from
+  the top of a block of words to the middle line of the system under
+  it, the padding at least between their ink. Words that start a page
+  under the titles stand `markup-markup-spacing`'s padding under their
+  ink. A page that is spread (`ragged-bottom` off) stretches these as
+  the room between systems, each by its `stretchability`, and the room
+  under words that end a page as `last-bottom-spacing`'s; the rows of a
+  block keep their distances.
 
 - *Real files* (score #359): layout settings — `\override`, `\revert`,
   `\once`, `\tweak`, `\set`, `\unset`, the direction and style switches,
-  a context's `\with`, `\layout`, `\midi` and `\paper` settings, a
-  `\markup` before or between the scores, `\include` and unprinted header
+  a context's `\with`, `\layout`, `\midi` and `\paper` settings,
+  `\include` and unprinted header
   fields — read whole and passed over, each reported as a warning
   (`eui_score::warnings(src)`); `\stemUp`/`\stemDown`/`\stemNeutral` and
   `\autoBeamOff`/`\autoBeamOn` honoured; `\breathe`, `\caesura`,
@@ -1592,7 +1630,8 @@ and `\unless` with `\on-first-page`, `\on-last-page`,
 pages counted from the page its `\bookpart` starts, the numbers from
 `first-page-number`, printed unless `print-page-number = ##f`, on a part's
 first page only with `print-first-page-number = ##t` (score #1025); a
-`\pageBreak` between two scores starts the second on a page — with the header's `copyright` centred
+`\pageBreak` between two scores starts the second on a page; a book part's
+own `\paper` sets its pages' headers, footers and numbers — with the header's `copyright` centred
 over the first page's footer and at most `systems-per-page` systems a page;
 every word also written as invisible text under its outline, so a reader
 selects and searches it), and several
