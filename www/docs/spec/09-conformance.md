@@ -1220,6 +1220,16 @@ version 7) and a margin.
   (`the_four_shape_systems_and_the_other_families`); each head of a chord
   its own, `\set shapeNoteStyles` with `#f`, `\unset`, drawn
   (`each_head_of_a_chord_has_its_own_shape_and_set_shape_note_styles_is_read`).
+- **A Roman numeral analysis is drawn under its notes** (03 §1.4; score
+  #1026), in `crates/eui-score/tests/roman_numerals.rs`: LSR 710's file,
+  its Scheme definition passed over, its numerals read as the snippet
+  draws them (`the_snippet_s_numerals_are_read_as_it_draws_them`); its
+  accidentals, qualities and note names
+  (`accidentals_qualities_and_note_names`); plain markup with `\super`,
+  `\sub` and `\concat`
+  (`plain_markup_under_the_notes_raises_with_super_and_lowers_with_sub`);
+  each drawn, character by character, under its note, a stacked pair as
+  wide as its wider figure (`the_analysis_is_drawn_under_its_notes`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11

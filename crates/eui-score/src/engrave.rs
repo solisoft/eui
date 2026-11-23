@@ -1040,9 +1040,9 @@ fn verse_assign(bars: &mut [Bar], sylls: Option<&[Syllable]>, voice: u8, verse: 
 /// follows.
 fn lyric_room(ev: &mut Ev) {
     // The widest syllable of every verse sung on the note.
-    let sung: Vec<Syllable> = ev.lyric.iter().chain(ev.verses.iter().flatten()).filter(|l| !l.text.is_empty()).cloned().collect();
+    let sung: Vec<Syllable> = ev.lyric.iter().chain(ev.verses.iter().flatten()).filter(|l| !l.text.is_empty() || !l.runs.is_empty()).cloned().collect();
     for lyr in sung {
-        let w = crate::draw::lyric_width(&lyr.text, em(0.0));
+        let w = crate::draw::syllable_width(&lyr, em(0.0));
         let c = ev.head_w.unwrap_or(0.0) / 2.0;
         let after = if lyr.hyphen { 0.9 } else { 0.35 };
         ev.right = ev.right.max(c + w / 2.0 + after);

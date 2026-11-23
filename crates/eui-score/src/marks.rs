@@ -2582,21 +2582,31 @@ pub(crate) const RAISE: f64 = 0.45;
 pub(crate) fn run_em(r: &Run, e: f64) -> (f64, f64) {
     if r.sup {
         (e * SUP, e * RAISE)
+    } else if r.sub {
+        (e * SUP, -e * LOWER)
     } else {
         (e, 0.0)
     }
 }
 
-/// How wide pieces of markup are, a word space before each that asks.
+/// How far a subscript is lowered, in its words' ems: clear of a
+/// superscript stacked over it.
+pub(crate) const LOWER: f64 = 0.2;
+
+/// How wide pieces of markup are, a word space before each that asks; a
+/// stacked one under the one before, the two as wide as the wider.
 pub(crate) fn runs_width(runs: &[Run], e: f64) -> f64 {
     let space = text_width(" ", Weight::Regular, e);
-    let mut w = 0.0;
+    let (mut start, mut end) = (0.0_f64, 0.0_f64);
     for (k, r) in runs.iter().enumerate() {
         let (re, _) = run_em(r, e);
-        if k > 0 && r.gap {
-            w += space * re / e;
+        if !r.stack {
+            start = end;
+            if k > 0 && r.gap {
+                start += space * re / e;
+            }
         }
-        w += if let Some(d) = crate::frets::from_spec(&r.text) {
+        let wide = if let Some(d) = crate::frets::from_spec(&r.text) {
             crate::frets::size(&d, re).0
         } else if r.glyph {
             glyph_run_w(r)
@@ -2605,8 +2615,9 @@ pub(crate) fn runs_width(runs: &[Run], e: f64) -> f64 {
         } else {
             text_width(&r.text, r.weight, re)
         };
+        end = if r.stack { end.max(start + wide) } else { start + wide };
     }
-    w
+    end
 }
 
 /// The major seventh's triangle, which the text face has not got: drawn as

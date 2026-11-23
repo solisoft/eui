@@ -24,6 +24,14 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- Roman numeral analysis (score #1026), as LilyPond's snippet (LSR 710)
+  writes it: `\markup \rN { V 6 5 }` as a syllable of a `Lyrics` context
+  under the bass — the numeral, its accidental, its quality and figures
+  raised or stacked, `/` and a secondary function's numeral. Any
+  `\markup` is a syllable now (it was refused among lyrics), with
+  `\super`, `\sub` and `\concat`; and `\new Lyrics` may stand inside a
+  staff's `<< >>`, beside the voice it is sung to (it was refused).
+
 - Shape notes (score #1026): `\aikenHeads`, `\aikenThinHeads`,
   `\sacredHarpHeads`, `\southernHarmonyHeads`, `\funkHeads` and
   `\walkerHeads`, each with its `…Minor`, and `\set shapeNoteStyles`

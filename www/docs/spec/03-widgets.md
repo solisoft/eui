@@ -630,6 +630,18 @@ construct as LilyPond 2.25 draws it:
   that tonic as la, the major ones as do, as LilyPond's do — in
   Emmentaler's shape-note glyphs (`noteheads.s2do`, `u2fa`/`d2fa` by the
   stem); `#f` is the usual head, `\unset shapeNoteStyles` ends them.
+- *Roman numerals* (score #1026): LilyPond has no command of its own for
+  them; the form read is LSR snippet 710's, `\markup \rN { vii o 4 3 / IV }`
+  as a syllable of a `Lyrics` context — `\new Lyrics \lyricsto "bass" { … }`
+  beside the voice inside the staff's `<< >>`, or after the staff — its
+  `#(define-markup-command (rN …) …)` read and passed over. The symbols,
+  in order: the numeral (`b`, `s`, `n` before it a flat, a sharp, a
+  natural; a note name's after it, `Cs`, `Eb`; `It`, `Fr`, `Ger` as they
+  are), its quality raised (`o` °, `h` ø, `+`, `M7`, `add6`), one figure
+  raised or two stacked, then `/` and the numeral of a secondary
+  function. Any `\markup` is a syllable too, with `\super` and `\sub`
+  (small, raised or lowered) and `\concat` (no space between): `\markup
+  { "V" \super "7" }`. `\set stanza` is passed over.
 - *Files as they are written* (score #1031, #1032): a context named by a
   bare word (`\context Voice = V`); a `\new Voice` holding its own
   `\new Lyrics`, which makes its staff; a variable in a lyric block's

@@ -259,6 +259,8 @@ pub(crate) struct LyricItem {
     pub s: String,
     pub quoted: bool,
     pub at: usize,
+    /// `\markup …` among the words: its pieces.
+    pub runs: Vec<Run>,
 }
 
 fn letter(ch: char) -> bool {
@@ -506,7 +508,7 @@ fn lyric_tokens(cs: &[char], mut i: usize, at: usize) -> Result<(Vec<LyricItem>,
             if jj >= n {
                 return refuse("a string that is never closed", i);
             }
-            items.push(LyricItem { s: word, quoted: true, at: i });
+            items.push(LyricItem { s: word, quoted: true, at: i, runs: Vec::new() });
             i = jj + 1;
         } else {
             if cs[i] == '{' {
@@ -518,12 +520,21 @@ fn lyric_tokens(cs: &[char], mut i: usize, at: usize) -> Result<(Vec<LyricItem>,
                 if (word == "skip" && after < n && digit(cs[after])) || word == "set" {
                     beyond();
                 }
+                if word == "markup" {
+                    // `\markup \rN { V 6 5 }4`, `\markup { "V" \super "7" }`
+                    // (score #1026): a syllable drawn as its markup.
+                    let (runs, k) = lyric_markup(cs, i, jj)?;
+                    let text: String = runs.iter().filter(|r| !r.glyph).map(|r| r.text.as_str()).collect();
+                    items.push(LyricItem { s: text, quoted: true, at: i, runs });
+                    i = k;
+                    continue;
+                }
                 if word == "skip" && after < n && digit(cs[after]) {
                     let mut k = after;
                     while k < n && (digit(cs[k]) || cs[k] == '.') {
                         k += 1;
                     }
-                    items.push(LyricItem { s: "_".into(), quoted: false, at: i });
+                    items.push(LyricItem { s: "_".into(), quoted: false, at: i, runs: Vec::new() });
                     i = k;
                     continue;
                 }
@@ -560,11 +571,104 @@ fn lyric_tokens(cs: &[char], mut i: usize, at: usize) -> Result<(Vec<LyricItem>,
                 word.push(cs[jj]);
                 jj += 1;
             }
-            items.push(LyricItem { s: without_duration(&word), quoted: false, at: i });
+            items.push(LyricItem { s: without_duration(&word), quoted: false, at: i, runs: Vec::new() });
             i = jj;
         }
     }
     Ok((items, i + 1))
+}
+
+/// `\markup …` among lyrics, from its `\` at `i` (`jj` just after the
+/// word): its pieces, and where it ends — after the commands that style it,
+/// their Scheme arguments, and the braces, the string or the word they
+/// take, and after a duration written on it (`{ I }4`).
+fn lyric_markup(cs: &[char], i: usize, jj: usize) -> Result<(Vec<Run>, usize), ScoreError> {
+    let n = cs.len();
+    let mut j = jj;
+    loop {
+        j = skip_blank(cs, j);
+        if j >= n {
+            return refuse("a \\markup that is never finished", i);
+        }
+        match cs[j] {
+            '\\' => {
+                let (_, k) = name_at(cs, j + 1, letter);
+                j = skip_blank(cs, k);
+                // Its Scheme arguments: `#2`, `#'(…)`, `#"…"`.
+                while j < n && cs[j] == '#' {
+                    j += 1;
+                    while j < n && (cs[j] == '#' || cs[j] == '\'') {
+                        j += 1;
+                    }
+                    if j < n && cs[j] == '(' {
+                        let mut depth = 0;
+                        while j < n {
+                            depth += i32::from(cs[j] == '(') - i32::from(cs[j] == ')');
+                            j += 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                    } else if j < n && cs[j] == '"' {
+                        j += 1;
+                        while j < n && cs[j] != '"' {
+                            j += 1;
+                        }
+                        j += 1;
+                    } else {
+                        while j < n && !blank(cs[j]) && cs[j] != '}' {
+                            j += 1;
+                        }
+                    }
+                    j = skip_blank(cs, j);
+                }
+            }
+            '{' => {
+                let mut depth = 0;
+                let mut quoted = false;
+                while j < n {
+                    match cs[j] {
+                        '"' => quoted = !quoted,
+                        '{' if !quoted => depth += 1,
+                        '}' if !quoted => depth -= 1,
+                        _ => {}
+                    }
+                    j += 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                break;
+            }
+            '"' => {
+                j += 1;
+                while j < n && cs[j] != '"' {
+                    j += 1;
+                }
+                j += 1;
+                break;
+            }
+            _ => {
+                while j < n && !blank(cs[j]) && cs[j] != '}' {
+                    j += 1;
+                }
+                break;
+            }
+        }
+    }
+    let end = j.min(n);
+    let source: String = cs[i..end].iter().collect();
+    let mut toks = tokens(&source)?;
+    for t in &mut toks {
+        t.at += i;
+    }
+    let (runs, _) = markup(&toks, 1, i)?;
+    // A duration on it is the syllable's, not the markup's.
+    let mut k = end;
+    while k < n && (digit(cs[k]) || cs[k] == '.') {
+        k += 1;
+    }
+    Ok((runs, k))
 }
 
 /// Where a setting among lyrics ends, from just after its command: its
@@ -663,7 +767,7 @@ fn syllables(items: &[LyricItem], at: usize) -> Result<Vec<Syllable>, ScoreError
             continue;
         }
         let skip = !it.quoted && it.s == "_";
-        out.push(Syllable { text: if skip { String::new() } else { it.s.clone() }, hyphen: false, extend: false });
+        out.push(Syllable { text: if skip { String::new() } else { it.s.clone() }, runs: it.runs.clone(), hyphen: false, extend: false });
     }
     if join {
         return refuse("~ joins two syllables: e~a", at);
@@ -1043,6 +1147,11 @@ pub struct Run {
     pub glyph: bool,
     /// Set small and raised: a chord name's `7`.
     pub sup: bool,
+    /// Set small and lowered: `\sub`, a Roman numeral's lower figure.
+    pub sub: bool,
+    /// Drawn where the run before it starts, not after it: the lower of
+    /// two figures stacked (a Roman numeral's `6 5`, score #1026).
+    pub stack: bool,
     /// A word space before it.
     pub gap: bool,
     /// A glyph's size against the staff's: an accidental in a chord's name
@@ -1053,12 +1162,12 @@ pub struct Run {
 impl Run {
     /// Words in a face, a space before them.
     pub fn words(text: impl Into<String>, weight: Weight) -> Self {
-        Run { text: text.into(), weight, glyph: false, sup: false, gap: true, size: 1.0 }
+        Run { text: text.into(), weight, glyph: false, sup: false, sub: false, stack: false, gap: true, size: 1.0 }
     }
 
     /// A music glyph by its SMuFL name.
     pub fn glyph(name: impl Into<String>) -> Self {
-        Run { text: name.into(), weight: Weight::Regular, glyph: true, sup: false, gap: true, size: 1.0 }
+        Run { text: name.into(), weight: Weight::Regular, glyph: true, sup: false, sub: false, stack: false, gap: true, size: 1.0 }
     }
 }
 
@@ -1444,10 +1553,15 @@ pub enum TabMark {
 }
 
 /// A syllable of `\addlyrics`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Syllable {
-    /// Its words; none for `_`, a note that takes no syllable.
+    /// Its words; none for `_`, a note that takes no syllable. For
+    /// markup, its words run together.
     pub text: String,
+    /// A syllable written as `\markup` (score #1026): a Roman numeral's
+    /// `\rN { V 6 5 }`, `{ "V" \super "7" }` — drawn as these pieces.
+    /// Empty for words.
+    pub runs: Vec<Run>,
     /// `--`: the word goes on in the next syllable.
     pub hyphen: bool,
     /// `__`: held over the notes after it.
@@ -2029,6 +2143,9 @@ struct St {
     here: i64,
     /// The ossias read in the staff: where each starts, and its music.
     ossias: Vec<(i64, Vec<Ev>)>,
+    /// `\new Lyrics` read in the staff's `<< >>` (score #1026): the voice
+    /// each is sung to (none, the staff's), and its words.
+    lyrics: Vec<(Option<String>, Vec<Syllable>, usize)>,
     /// `\stemUp` 1, `\stemDown` -1, else 0.
     stem: i8,
     /// `\autoBeamOff` in force.
@@ -3538,7 +3655,21 @@ fn auto_change(toks: &[Tok], i: usize, st: &mut Base, staves: &mut Vec<Staff>) -
 /// `\new Lyrics [= "name"] [\with { … }] \lyricsto "voice" { … }`, or with
 /// `\lyricmode { … }`: the words sung to the voice named, or to the staff
 /// before them.
-fn lyrics_part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut [Staff]) -> Result<usize, ScoreError> {
+fn lyrics_part(toks: &[Tok], i: usize, st: &mut Base, staves: &mut [Staff]) -> Result<usize, ScoreError> {
+    let (voice, syllables, at, i) = read_lyrics_context(toks, i)?;
+    match voice {
+        Some(v) => st.pending.push(Pending { voice: v, syllables, at }),
+        None => {
+            let Some(last) = staves.last_mut() else { return refuse("\\new Lyrics follows the staff it is sung to", at) };
+            add_verse(last, syllables, 1, at)?;
+        }
+    }
+    Ok(i)
+}
+
+/// `\new Lyrics …` at `i`: the voice it is sung to, if it names one, its
+/// words, where it is written, and the token after it.
+fn read_lyrics_context(toks: &[Tok], mut i: usize) -> Result<(Option<String>, Vec<Syllable>, usize, usize), ScoreError> {
     let at = toks[i].at;
     i += 2;
     if named_context(toks, i) {
@@ -3567,14 +3698,7 @@ fn lyrics_part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut [Staff]) 
         }
         i += 1;
     }
-    match voice {
-        Some(v) => st.pending.push(Pending { voice: v, syllables, at }),
-        None => {
-            let Some(last) = staves.last_mut() else { return refuse("\\new Lyrics follows the staff it is sung to", at) };
-            add_verse(last, syllables, 1, at)?;
-        }
-    }
-    Ok(i)
+    Ok((voice, syllables, at, i))
 }
 
 fn with(toks: &[Tok], mut i: usize, props: &mut Props) -> Result<usize, ScoreError> {
@@ -3754,6 +3878,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         quotes: std::rc::Rc::clone(&base.quotes),
         here: 0,
         ossias: Vec::new(),
+        lyrics: Vec::new(),
         stem: 0,
         no_autobeam: false,
         arp_style: ArpStyle::Wave,
@@ -3817,7 +3942,15 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         }
     }
     crate::written::spend_events(1, toks.get(i.saturating_sub(1)).map_or(0, |t| t.at))?;
-    staves.push(Staff { kind, events: st.events, props: st.props, lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: st.voice_names, name });
+    let mut made = Staff { kind, events: st.events, props: st.props, lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: st.voice_names, name };
+    // Lyrics read in its `<< >>`: sung to a voice of its own, or to it.
+    for (voice, words, at) in st.lyrics {
+        match voice {
+            Some(voice) => base.pending.push(Pending { voice, syllables: words, at }),
+            None => add_verse(&mut made, words, 1, at)?,
+        }
+    }
+    staves.push(made);
     Ok(i)
 }
 
@@ -4940,6 +5073,15 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             let kind = arg.as_ref().map_or("", |a| a.v.as_str());
             if kind == "Staff" && st.in_part {
                 return ossia(toks, i, st, hd);
+            }
+            if kind == "Lyrics" {
+                // `\new Staff << \new Voice = "bass" { … } \new Lyrics
+                // \lyricsto "bass" { … } >>`, as LSR 710 writes its analysis
+                // (score #1026): the words, set under the staff.
+                beyond();
+                let (voice, words, at, j) = read_lyrics_context(toks, i)?;
+                st.lyrics.push((voice, words, at));
+                return Ok(j);
             }
             if !voice_kind(kind) {
                 return refuse(format!("\\new {kind} inside a staff's music is not drawn: a staff's music has voices"), tk.at);
@@ -6582,7 +6724,43 @@ fn markup_item(toks: &[Tok], i: usize, weight: Weight, runs: &mut Vec<Run>, at: 
             "bold" => markup_item(toks, i + 1, Weight::Bold, runs, at),
             "italic" => markup_item(toks, i + 1, Weight::Italic, runs, at),
             "upright" | "normal-text" | "roman" | "medium" => markup_item(toks, i + 1, Weight::Regular, runs, at),
-            "line" | "concat" | "small" | "smaller" | "large" | "larger" | "huge" | "tiny" | "teeny" | "normalsize" | "box" | "circle" | "center-align" | "left-align" | "right-align" | "column"
+            "super" | "sub" | "concat" => {
+                // Raised or lowered, small; `\concat`'s pieces with no space between.
+                let from = runs.len();
+                let j = markup_item(toks, i + 1, weight, runs, at)?;
+                for (k, r) in runs.iter_mut().enumerate().skip(from) {
+                    match t.v.as_str() {
+                        "super" => r.sup = true,
+                        "sub" => r.sub = true,
+                        _ => r.gap = r.gap && k == from,
+                    }
+                }
+                Ok(j)
+            }
+            "rN" => {
+                // LSR 710's Roman numeral (score #1026): `\rN { vii o 4 3 / IV }`.
+                if !is(toks, i + 1, T::Sym('{')) {
+                    return refuse("\\rN wants its symbols in braces: \\rN { V 6 5 }", t.at);
+                }
+                let mut j = i + 2;
+                let mut symbols: Vec<String> = Vec::new();
+                // A symbol is what is written without a space: `MM7` one, which reads as two words.
+                let mut end = 0;
+                while let Some(s) = toks.get(j).filter(|s| s.t != T::Sym('}')) {
+                    match symbols.last_mut() {
+                        Some(last) if s.at == end && j > i + 2 => last.push_str(&s.v),
+                        _ => symbols.push(s.v.clone()),
+                    }
+                    end = s.at + s.v.chars().count();
+                    j += 1;
+                }
+                if j >= toks.len() {
+                    return refuse("a \\markup { that is never closed", at);
+                }
+                runs.extend(roman_numeral(&symbols, weight));
+                Ok(j + 1)
+            }
+            "line" | "small" | "smaller" | "large" | "larger" | "huge" | "tiny" | "teeny" | "normalsize" | "box" | "circle" | "center-align" | "left-align" | "right-align" | "column"
             | "center-column" | "fill-line" | "sans" | "serif" | "caps" | "smallCaps" => markup_item(toks, i + 1, weight, runs, at),
             "fontsize" | "abs-fontsize" | "raise" | "lower" | "halign" | "with-color" | "translate" | "magnify" => {
                 // `\fontsize #2`, `\raise #1`: an argument the drawing leaves be.
@@ -6645,6 +6823,85 @@ fn markup_item(toks: &[Tok], i: usize, weight: Weight, runs: &mut Vec<Run>, at: 
         },
         _ => refuse(format!("'{}' is not markup this draws", t.v), t.at),
     }
+}
+
+/// A Roman numeral as LSR 710's `\rN` draws it (score #1026), from its
+/// symbols in order: the numeral — `b`, `s` or `n` before it a flat, a
+/// sharp or a natural; a note name's after it (`Cs`, `Eb`) — then its
+/// quality raised (`o` diminished °, `h` half-diminished ø, `+`, `M7`,
+/// `add6` …), its figures (one raised, two stacked), and `/` before the
+/// numeral of a secondary function.
+fn roman_numeral(symbols: &[String], weight: Weight) -> Vec<Run> {
+    let small = |text: &str| Run { sup: true, gap: false, ..Run::words(text, weight) };
+    let accidental = |c: char| match c {
+        'b' => Some("accidentalFlat"),
+        's' => Some("accidentalSharp"),
+        'n' => Some("accidentalNatural"),
+        _ => None,
+    };
+    let roman = |w: &str| !w.is_empty() && w.chars().all(|c| "IVivx".contains(c));
+    let mut out: Vec<Run> = Vec::new();
+    let numeral = |w: &str, out: &mut Vec<Run>| {
+        let mut cs = w.chars();
+        let first = cs.next().unwrap_or(' ');
+        let rest: String = cs.collect();
+        let glyph_run = |name: &str| Run { gap: false, size: 0.65, ..Run::glyph(name) };
+        if let Some(acc) = accidental(first).filter(|_| roman(&rest)) {
+            out.push(glyph_run(acc));
+            out.push(Run { gap: false, ..Run::words(rest, weight) });
+        } else if "ABCDEFG".contains(first) && rest.len() == 1 && accidental(rest.chars().next().unwrap_or(' ')).is_some() {
+            out.push(Run { gap: false, ..Run::words(first.to_string(), weight) });
+            if let Some(acc) = accidental(rest.chars().next().unwrap_or(' ')) {
+                out.push(glyph_run(acc));
+            }
+        } else {
+            out.push(Run { gap: false, ..Run::words(w, weight) });
+        }
+    };
+    let mut k = 0;
+    if let Some(first) = symbols.first() {
+        numeral(first, &mut out);
+        k = 1;
+    }
+    let mut figures: Vec<&str> = Vec::new();
+    let flush = |figures: &mut Vec<&str>, out: &mut Vec<Run>| {
+        match figures.as_slice() {
+            [] => {}
+            [one] => out.push(small(one)),
+            [top, bottom, ..] => {
+                out.push(small(top));
+                out.push(Run { sup: false, sub: true, stack: true, ..small(bottom) });
+            }
+        }
+        figures.clear();
+    };
+    while let Some(w) = symbols.get(k) {
+        k += 1;
+        if w == "/" {
+            flush(&mut figures, &mut out);
+            out.push(Run { gap: false, ..Run::words("/", weight) });
+            if let Some(next) = symbols.get(k) {
+                numeral(next, &mut out);
+                k += 1;
+            }
+            continue;
+        }
+        if w.starts_with(|c: char| c.is_ascii_digit()) || (w.len() > 1 && accidental(w.chars().next().unwrap_or(' ')).is_some() && w[1..].chars().all(|c| c.is_ascii_digit())) {
+            figures.push(w);
+            continue;
+        }
+        flush(&mut figures, &mut out);
+        out.push(small(match w.as_str() {
+            "o" => "°",
+            "h" => "ø",
+            other => other,
+        }));
+    }
+    flush(&mut figures, &mut out);
+    if let Some(first) = out.first_mut() {
+        first.gap = true;
+    }
+    out
 }
 
 // ---- Words after the music ---------------------------------------------------------

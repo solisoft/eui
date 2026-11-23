@@ -1113,14 +1113,18 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64, verse: usize) {
     let notes: Vec<&Ev> = line.bars.clone().flat_map(|b| bars[b].items.iter()).filter(|ev| ev.k == Kind::Note && voice_of(ev) == sung).collect();
     for (k, ev) in notes.iter().enumerate() {
         let Some(lyr) = verse_of(ev, verse) else { continue };
-        let w = if lyr.text.is_empty() { 0.0 } else { lyric_width(&lyr.text, e) };
+        let w = if lyr.text.is_empty() && lyr.runs.is_empty() { 0.0 } else { syllable_width(lyr, e) };
         // Centred on its head, or as `LyricText.self-alignment-X` says.
         let align = ev.look.num("LyricText.self-alignment-X").unwrap_or(0.0).clamp(-1.0, 1.0);
         let x0 = ev.x + (ev.head_w.unwrap_or(0.0) - w) * (align + 1.0) / 2.0;
         let x1 = x0 + w;
         if w > 0.0 {
             let from = pen.paths.len();
-            draw_syllable(pen, &lyr.text, x0, y, e);
+            if lyr.runs.is_empty() {
+                draw_syllable(pen, &lyr.text, x0, y, e);
+            } else {
+                draw_runs(pen, &lyr.runs, x0, y, e);
+            }
             word_drawn(ev.i, "lyric", verse, from..pen.paths.len());
         }
         let mut nxt: Option<&Ev> = None;
@@ -1139,7 +1143,7 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64, verse: usize) {
         }
         if lyr.hyphen && w > 0.0 {
             let n0 = match nxt {
-                Some(nx) => nx.x + nx.head_w.unwrap_or(0.0) / 2.0 - verse_of(nx, verse).map_or(0.0, |l| lyric_width(&l.text, e)) / 2.0,
+                Some(nx) => nx.x + nx.head_w.unwrap_or(0.0) / 2.0 - verse_of(nx, verse).map_or(0.0, |l| syllable_width(l, e)) / 2.0,
                 None => line.right,
             };
             let len = 0.66_f64.min(n0 - x1 - 0.3);
@@ -1172,6 +1176,15 @@ fn elision_tie(text: &str) -> &'static str {
 
 /// A syllable's width: its words, and for each `~` in it, as LilyPond's
 /// `tied-lyric` sets it, the tie's glyph with half a word space either side.
+/// A syllable's width: its markup's (score #1026), or its words'.
+pub(crate) fn syllable_width(lyr: &Syllable, e: f64) -> f64 {
+    if lyr.runs.is_empty() {
+        lyric_width(&lyr.text, e)
+    } else {
+        crate::marks::runs_width(&lyr.runs, e)
+    }
+}
+
 pub(crate) fn lyric_width(text: &str, e: f64) -> f64 {
     let ties = text.matches('~').count() as f64;
     let words: f64 = text.split('~').map(|part| text_width(part, Weight::Regular, e)).sum();
@@ -1881,11 +1894,20 @@ fn draw_percent(pen: &mut Pen, bar: &Bar, top: f64) {
 /// smaller and raised.
 fn draw_runs(pen: &mut Pen, runs: &[Run], mut x: f64, y: f64, e: f64) {
     let space = text_width(" ", Weight::Regular, e);
+    // Where the run before started and ended: a stacked run starts where it
+    // did, and what follows both starts past the wider.
+    let (mut last_start, mut last_end) = (x, x);
     for (k, r) in runs.iter().enumerate() {
         let (re, rise) = run_em(r, e);
-        if k > 0 && r.gap {
-            x += space * re / e;
+        if r.stack {
+            x = last_start;
+        } else {
+            x = x.max(last_end);
+            if k > 0 && r.gap {
+                x += space * re / e;
+            }
         }
+        last_start = x;
         if let Some(d) = crate::frets::from_spec(&r.text) {
             // A guitar's chord: its diagram standing on the baseline.
             let (w, h) = crate::frets::size(&d, re);
@@ -1917,6 +1939,7 @@ fn draw_runs(pen: &mut Pen, runs: &[Run], mut x: f64, y: f64, e: f64) {
         } else {
             x = pen.text(&r.text, r.weight, x, y - rise, re);
         }
+        last_end = if r.stack { last_end.max(x) } else { x };
     }
 }
 
