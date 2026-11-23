@@ -3,7 +3,9 @@
 //! "Several staves"). Function for function the Soli engraver's, under
 //! the same names without their `score_` prefix.
 
+use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::OnceLock;
 
 use crate::breaking::{line_starts, Opts, Widths};
 use crate::glyphs::{glyph, Weight};
@@ -955,57 +957,177 @@ fn displace(ev: &mut Ev) {
     }
 }
 
-struct AccCol {
-    spans: Vec<(f64, f64)>,
-    w: f64,
-    x: f64,
-}
+/// An eighth of a staff space: the height of a band of an accidental's
+/// profile. A head's place is a multiple of four of them.
+const ACC_BANDS: f64 = 8.0;
+/// LilyPond's `AccidentalPlacement.padding`: the white between an
+/// accidental and what stands right of it.
+const ACC_PADDING: f64 = 0.2;
 
-fn place_accidentals(ev: &mut Ev) -> f64 {
-    let mut cols: Vec<AccCol> = Vec::new();
-    let mut col_of: Vec<Option<usize>> = vec![None; ev.heads.len()];
-    for hk in (0..ev.heads.len()).rev() {
-        let Some(acc) = ev.heads[hk].acc else { continue };
-        let mut g = glyph(acc_name(acc)).clone();
-        if ev.heads[hk].paren {
-            g.advance = paren_width(acc);
-        }
-        let y = 2.0 - ev.heads[hk].pos as f64 / 2.0;
-        let top = y + g.bbox[1];
-        let low = y + g.bbox[3];
-        let mut placed = false;
-        for (ci, col) in cols.iter_mut().enumerate() {
-            let clear = col.spans.iter().all(|sn| low <= sn.0 + 0.1 || top >= sn.1 - 0.1);
-            if clear {
-                col.spans.push((top, low));
-                col.w = col.w.max(g.advance);
-                col_of[hk] = Some(ci);
-                placed = true;
-                break;
+/// An accidental's ink, band by band down from its origin: `(band, left,
+/// right)`. Read from its outline, so that a flat's open corner over its
+/// bowl and a natural's two open corners are open; the right side stops at
+/// the advance, which is where the sign has always been held from its head.
+/// A reminder's (`cis?`) is the box of the sign and its parentheses.
+fn acc_profile(acc: i64, paren: bool) -> &'static [(i64, f64, f64)] {
+    static PROFILES: OnceLock<Vec<Vec<(i64, f64, f64)>>> = OnceLock::new();
+    let all = PROFILES.get_or_init(|| {
+        let mut out = Vec::with_capacity(10);
+        for paren in [false, true] {
+            for alter in -2..=2 {
+                let g = glyph(acc_name(alter));
+                if paren {
+                    let side = glyph("accidentalParensLeft");
+                    let (top, low) = (g.bbox[1].min(side.bbox[1]), g.bbox[3].max(side.bbox[3]));
+                    let (first, last) = ((top * ACC_BANDS + 1e-6).floor() as i64, (low * ACC_BANDS - 1e-6).floor() as i64);
+                    out.push((first..=last).map(|band| (band, 0.0, paren_width(alter))).collect());
+                } else {
+                    out.push(outline_bands(&g.fill, g.advance));
+                }
             }
         }
-        if !placed {
-            cols.push(AccCol { spans: vec![(top, low)], w: g.advance, x: 0.0 });
-            col_of[hk] = Some(cols.len() - 1);
+        out
+    });
+    let slot = (acc.clamp(-2, 2) + 2) as usize + if paren { 5 } else { 0 };
+    all.get(slot).map_or(&[], Vec::as_slice)
+}
+
+/// The bands an outline's ink is in, its right side no further than `cap`.
+fn outline_bands(fill: &[f64], cap: f64) -> Vec<(i64, f64, f64)> {
+    let mut bands: std::collections::BTreeMap<i64, (f64, f64)> = std::collections::BTreeMap::new();
+    let mut seen = |x: f64, y: f64| {
+        // A point on a band's edge is the ink's edge: in neither band.
+        let at = y * ACC_BANDS;
+        if (at - at.round()).abs() < 1e-6 {
+            return;
         }
+        let e = bands.entry(at.floor() as i64).or_insert((x, x));
+        *e = (e.0.min(x), e.1.max(x));
+    };
+    let num = |i: usize| fill.get(i).copied().unwrap_or(0.0);
+    let (mut i, mut at) = (0, (0.0, 0.0));
+    while i < fill.len() {
+        let args = crate::text::args_of(num(i));
+        let to = if args >= 2 { (num(i + args - 1), num(i + args)) } else { at };
+        // The curve's control points: a line's are its ends.
+        let (c1, c2) = match args {
+            6 => ((num(i + 1), num(i + 2)), (num(i + 3), num(i + 4))),
+            4 => {
+                let q = (num(i + 1), num(i + 2));
+                ((at.0 + 2.0 * (q.0 - at.0) / 3.0, at.1 + 2.0 * (q.1 - at.1) / 3.0), (to.0 + 2.0 * (q.0 - to.0) / 3.0, to.1 + 2.0 * (q.1 - to.1) / 3.0))
+            }
+            _ => (at, to),
+        };
+        if num(i) as i64 != 0 && args > 0 {
+            // Steps no further apart than a fifth of a band.
+            let reach = (c1.1 - at.1).abs() + (c2.1 - c1.1).abs() + (to.1 - c2.1).abs();
+            let steps = ((reach * ACC_BANDS * 5.0).ceil() as usize).clamp(1, 400);
+            for s in 0..=steps {
+                let t = s as f64 / steps as f64;
+                let u = 1.0 - t;
+                let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+                seen(w[0] * at.0 + w[1] * c1.0 + w[2] * c2.0 + w[3] * to.0, w[0] * at.1 + w[1] * c1.1 + w[2] * c2.1 + w[3] * to.1);
+            }
+        }
+        at = to;
+        i += 1 + args;
     }
+    bands.into_iter().map(|(band, (left, right))| (band, left, right.min(cap))).collect()
+}
+
+/// The accidentals of notes an octave apart, which stand in one column.
+struct AccGroup {
+    /// The heads, the highest first.
+    heads: Vec<usize>,
+    /// Their widest sign's advance: the column's right edge from its x.
+    w: f64,
+}
+
+/// A chord's accidentals, as LilyPond's `Accidental_placement` puts them
+/// (score #1019): the notes an octave apart share a column; the columns are
+/// placed the top one first, then the bottom one, then the second from the
+/// top, the second from the bottom … (the zig-zag of the engraving books),
+/// each as near the heads as the ink already there lets it — the heads, a
+/// head moved left of a stem down, the accidentals placed before it —
+/// `ACC_PADDING` clear of it band by band, so that a flat goes under the
+/// sharp over it. Returns the room they take left of the note.
+fn place_accidentals(ev: &mut Ev) -> f64 {
     let shifted = ev.heads.iter().any(|h| h.side == -1);
     let hw = ev.head_w.unwrap_or(0.0);
-    let mut rim = if shifted { -(hw - RULE.stem) } else { 0.0 };
-    for col in &mut cols {
-        col.x = rim - 0.2 - col.w;
-        rim = col.x;
-    }
-    for (hk, c) in col_of.into_iter().enumerate() {
-        if let Some(ci) = c {
-            ev.heads[hk].acc_x = Some(cols[ci].x);
+    let aside = if shifted { -(hw - RULE.stem) } else { 0.0 };
+    // The columns, the one with the highest note first (the heads go up).
+    let mut groups: Vec<AccGroup> = Vec::new();
+    for hk in (0..ev.heads.len()).rev() {
+        let Some(acc) = ev.heads.get(hk).and_then(|h| h.acc) else { continue };
+        let (pos, paren) = ev.heads.get(hk).map_or((0, false), |h| (h.pos, h.paren));
+        let w = if paren { paren_width(acc) } else { glyph(acc_name(acc)).advance };
+        let octave = groups.iter_mut().find(|g| g.heads.first().and_then(|&k| ev.heads.get(k)).is_some_and(|h| (h.pos - pos) % 7 == 0));
+        match octave {
+            Some(g) => {
+                g.heads.push(hk);
+                g.w = g.w.max(w);
+            }
+            None => groups.push(AccGroup { heads: vec![hk], w }),
         }
     }
-    if rim < 0.0 {
-        -rim
-    } else {
-        0.0
+    if groups.is_empty() {
+        return -aside;
     }
+    // What an accidental is held from: the left edge of the ink in each
+    // band, the heads' first.
+    let band_of = |pos: i64| 4 * (4 - pos);
+    let mut skyline: HashMap<i64, f64> = HashMap::new();
+    for h in &ev.heads {
+        let left = if h.side == -1 { aside } else { 0.0 };
+        for band in band_of(h.pos) - 4..band_of(h.pos) + 4 {
+            let e = skyline.entry(band).or_insert(left);
+            *e = e.min(left);
+        }
+    }
+    let mut rim: f64 = aside;
+    let (mut top, mut bottom) = (0, groups.len());
+    let mut from_top = true;
+    while top < bottom {
+        let gi = if from_top {
+            top += 1;
+            top - 1
+        } else {
+            bottom -= 1;
+            bottom
+        };
+        from_top = !from_top;
+        let Some(group) = groups.get(gi) else { break };
+        // Each sign's bands on the staff, its ink measured from the
+        // column's right edge.
+        let mut ink: Vec<(i64, f64, f64)> = Vec::new();
+        let mut edge = f64::INFINITY;
+        for &hk in &group.heads {
+            let Some(h) = ev.heads.get(hk) else { continue };
+            let Some(acc) = h.acc else { continue };
+            let own = if h.side == -1 { aside } else { 0.0 };
+            edge = edge.min(own - ACC_PADDING);
+            for &(band, left, right) in acc_profile(acc, h.paren) {
+                ink.push((band + band_of(h.pos), left - group.w, right - group.w));
+            }
+        }
+        for &(band, _, right) in &ink {
+            if let Some(&left) = skyline.get(&band) {
+                edge = edge.min(left - ACC_PADDING - right);
+            }
+        }
+        for &(band, left, _) in &ink {
+            let e = skyline.entry(band).or_insert(edge + left);
+            *e = e.min(edge + left);
+        }
+        let x = edge - group.w;
+        rim = rim.min(x);
+        for &hk in &group.heads {
+            if let Some(h) = ev.heads.get_mut(hk) {
+                h.acc_x = Some(x);
+            }
+        }
+    }
+    -rim
 }
 
 /// A reminder accidental's width, `cis?`: the sign between parentheses, as

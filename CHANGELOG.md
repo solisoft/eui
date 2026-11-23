@@ -249,6 +249,13 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Changed
 
+- A chord's accidentals stand as LilyPond places them (score #1019): the
+  top one nearest the heads, then the bottom one, then the second from the
+  top — the engraving books' zig-zag; notes an octave apart share a column;
+  and each sign goes as near as the ink already there lets it, 0.2 space
+  clear of it, so a flat or a natural goes under the sharp over it. They
+  stood in columns of whole boxes filled from the top, where two flats a
+  sixth apart touched.
 - The demo at eui-data.solisoft.net runs on the server's own `soli`
   (`soli serve` in its `app.infos`), as the other sites do, instead of a
   version pinned in its workflow and installed beside it: it sat on 2.27.2
