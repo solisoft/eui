@@ -182,9 +182,10 @@ release. A wire change lands here first, is released, and then the pin moves.
   `\unaCorda` and `\treCorde`, in italics under the staff as LilyPond's
   text style writes them; played as MIDI controllers 66 and 67.
 - Lyrics read the elision, `e~a` or `e ~ a` (score #1026): two syllables
-  sung on one note, joined by a small tie under them with half a word
-  space either side, as LilyPond's `tied-lyric` sets them. The tilde was
-  printed as it is written.
+  sung on one note, joined by Emmentaler's lyric tie under them (the short
+  one around a single letter) with half a word space either side, as
+  LilyPond's `tied-lyric` sets them. The tilde was printed as it is
+  written.
 - `\arpeggioArrowUp` and `\arpeggioArrowDown` draw the wavy line with
   Emmentaler's arrow head at its top or its foot (score #1026); the chord
   under a down arrow is rolled from its highest note. They were passed

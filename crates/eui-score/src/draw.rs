@@ -1130,39 +1130,42 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64, verse: usize) {
     }
 }
 
-/// How wide an elision's tie is, in a syllable set at `e`: LilyPond's
-/// `ties.lyric.default` (score #1026), which the glyph table does not hold —
-/// drawn as a tie's outline of that size instead.
-fn elision_tie_w(e: f64) -> f64 {
-    0.55 * e
-}
-
-/// How far an elision's tie hangs under the baseline, at its ends and at
-/// its lowest.
-fn elision_tie_drop(e: f64) -> (f64, f64) {
-    (0.08 * e, 0.2 * e)
+/// The tie of an elision in `text` (score #1026): LilyPond's
+/// `ties.lyric.default`, or `ties.lyric.short` where a single letter stands
+/// between two ties (`tied-lyric`'s `~[^.]~`).
+fn elision_tie(text: &str) -> &'static str {
+    let cs: Vec<char> = text.chars().collect();
+    let short = cs.windows(3).any(|w| w[0] == '~' && w[1] != '.' && w[1] != '~' && w[2] == '~');
+    if short {
+        "lyricsElisionNarrow"
+    } else {
+        "lyricsElision"
+    }
 }
 
 /// A syllable's width: its words, and for each `~` in it, as LilyPond's
-/// `tied-lyric` sets it, the tie with half a word space either side.
+/// `tied-lyric` sets it, the tie's glyph with half a word space either side.
 pub(crate) fn lyric_width(text: &str, e: f64) -> f64 {
     let ties = text.matches('~').count() as f64;
     let words: f64 = text.split('~').map(|part| text_width(part, Weight::Regular, e)).sum();
-    words + ties * (elision_tie_w(e) + text_width(" ", Weight::Regular, e))
+    if ties == 0.0 {
+        return words;
+    }
+    let tie = glyph(elision_tie(text));
+    words + ties * (tie.bbox[2] - tie.bbox[0] + text_width(" ", Weight::Regular, e))
 }
 
-/// A syllable at `x`: its words, and a tie under each `~` between them.
+/// A syllable at `x`: its words, and the tie's glyph under each `~`
+/// between them.
 fn draw_syllable(pen: &mut Pen, text: &str, x: f64, y: f64, e: f64) {
     let half = text_width(" ", Weight::Regular, e) / 2.0;
+    let name = elision_tie(text);
+    let tie = glyph(name);
     let mut at = x;
     for (k, part) in text.split('~').enumerate() {
         if k > 0 {
-            let (xa, xb) = (at + half, at + half + elision_tie_w(e));
-            let (end, low) = elision_tie_drop(e);
-            if let Some(cmds) = crate::marks::arc_cmds(xa, y + end, xb, y + end, 1.0, low - end) {
-                pen.fill(&cmds, 0.0, 0.0);
-            }
-            at = xb + half;
+            pen.glyph(name, at + half - tie.bbox[0], y);
+            at += half + tie.bbox[2] - tie.bbox[0] + half;
         }
         pen.text(part, Weight::Regular, at, y, e);
         at += text_width(part, Weight::Regular, e);

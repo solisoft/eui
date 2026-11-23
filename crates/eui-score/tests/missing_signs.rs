@@ -486,12 +486,17 @@ fn the_two_syllables_are_joined_by_a_tie_under_them() {
     let (tied, _) = paths(&eng(r"{ c'2 d' } \addlyrics { e~a la }"), 8.0, 0).unwrap();
     let (plain, _) = paths(&eng(r"{ c'2 d' } \addlyrics { ea la }"), 8.0, 0).unwrap();
     assert_eq!(tied.len(), plain.len() + 1);
-    let curves = |all: &[Path]| all.iter().filter(|p| matches!(p, Path::Fill(c) if c.len() == 21 && c[3] == 3.0 && c[10] == 1.0 && c[13] == 3.0 && c[20] == 4.0)).count();
-    assert_eq!(curves(&tied), curves(&plain) + 1, "a tie's outline: out along one curve, back along the other");
+    let ties = glyph_drawn(&tied, "lyricsElision");
+    assert_eq!(ties.len(), 1, "Emmentaler's ties.lyric.default, not a \"~\"");
+    assert!(glyph_drawn(&plain, "lyricsElision").is_empty());
+    // A single letter between two ties: the short one, twice.
+    let (short, _) = paths(&eng(r"{ c'2 d' } \addlyrics { e~a~o la }"), 8.0, 0).unwrap();
+    assert_eq!(glyph_drawn(&short, "lyricsElisionNarrow").len(), 2);
     // It takes room: the tie and half a space either side.
     let wide = items(&eng(r"{ c'16 d' } \addlyrics { e~a la }"))[0].right;
     let narrow = items(&eng(r"{ c'16 d' } \addlyrics { ea la }"))[0].right;
-    assert!(wide > narrow + 0.9, "{wide} against {narrow}");
+    let tie = eui_score::glyphs::glyph("lyricsElision").bbox;
+    assert!(wide > narrow + (tie[2] - tie[0]) / 2.0, "{wide} against {narrow}");
 }
 
 // ---- RhythmicStaff -----------------------------------------------------------
