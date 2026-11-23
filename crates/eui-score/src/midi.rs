@@ -167,6 +167,11 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[Hold], program: i64, name: &
             if ev.pedal_on {
                 ev_out.push((t0, 1, vec![(176 + channel) as u8, 64, 127]));
             }
+            // The sostenuto (66) and the soft pedal (67) the same way
+            // (score #1026).
+            for &(cc, on) in &ev.pedals {
+                ev_out.push((t0, i64::from(on), vec![(176 + channel) as u8, cc, if on { 127 } else { 0 }]));
+            }
             let t0 = t0 + stolen;
             let span = span - stolen;
             // What `\partCombine` leaves out of the staff, played all the

@@ -1528,8 +1528,7 @@ fn texts(bars: &[Bar], line: &mut Line) {
             for (index, tx) in ev.texts.iter().enumerate() {
                 let runs = tx.pieces();
                 // A pedal's "Ped." is no TextScript: the settings are the words'.
-                let pedal = runs.iter().any(|r| r.glyph && r.text.starts_with("keyboardPedal"));
-                let look = if pedal { crate::look::Look::default() } else { ev.look.clone() };
+                let look = if tx.pedal > 0 { crate::look::Look::default() } else { ev.look.clone() };
                 if look.omitted("TextScript") {
                     continue;
                 }

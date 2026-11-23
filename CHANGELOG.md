@@ -177,6 +177,10 @@ release. A wire change lands here first, is released, and then the pin moves.
   value's beams between them, short of a half note's stems, and the two
   notes played in turn in sixteenths. `\repeat tremolo 4 c16`, one note,
   is `c4:16`.
+- A score reads the other two piano pedals, which were refused (score
+  #1026): `\sostenutoOn` and `\sostenutoOff`, "Sost. Ped." and "*", and
+  `\unaCorda` and `\treCorde`, in italics under the staff as LilyPond's
+  text style writes them; played as MIDI controllers 66 and 67.
 
 ### Fixed
 

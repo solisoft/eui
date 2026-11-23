@@ -182,7 +182,7 @@ fn unite(mut x: Ev, y: &Ev, chord: bool) -> Ev {
 /// "a2", "Solo", "Solo II": over the note, upright, as LilyPond's
 /// CombineTextScript prints them.
 fn say(ev: &mut Ev, words: &str) {
-    ev.texts.insert(0, Words { text: words.to_owned(), dir: -1, runs: vec![Run::words(words, Weight::Regular)] });
+    ev.texts.insert(0, Words { text: words.to_owned(), dir: -1, runs: vec![Run::words(words, Weight::Regular)], pedal: 0 });
 }
 
 /// The two parts as one staff's events: `dir` 1 for `\partCombineUp` (its

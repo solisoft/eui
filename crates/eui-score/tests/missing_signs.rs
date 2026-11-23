@@ -231,3 +231,92 @@ fn the_two_notes_are_played_in_turn_in_the_written_value() {
     assert!(all[..8].iter().enumerate().all(|(k, n)| n.1 == k as u32 * q / 4 && n.2 == n.1 + q / 4), "sixteenths back to back: {all:?}");
     assert_eq!(all[8].1, 2 * q, "the next note after the half note's time");
 }
+
+// ---- The other pedals --------------------------------------------------------
+
+/// Every controller change of a Standard MIDI File: (tick, controller, value), in order.
+fn controls(bytes: &[u8]) -> Vec<(u32, u8, u8)> {
+    let mut out = Vec::new();
+    let mut i = 14;
+    while i + 8 <= bytes.len() {
+        let len = u32::from_be_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]) as usize;
+        let track = &bytes[i + 8..i + 8 + len];
+        i += 8 + len;
+        let (mut at, mut k, mut status) = (0u32, 0usize, 0u8);
+        while k < track.len() {
+            let mut delta = 0u32;
+            loop {
+                let b = track[k];
+                k += 1;
+                delta = (delta << 7) | u32::from(b & 0x7f);
+                if b & 0x80 == 0 {
+                    break;
+                }
+            }
+            at += delta;
+            if track[k] & 0x80 != 0 {
+                status = track[k];
+                k += 1;
+            }
+            match status & 0xf0 {
+                0xb0 => {
+                    out.push((at, track[k], track[k + 1]));
+                    k += 2;
+                }
+                0x80 | 0x90 | 0xa0 | 0xe0 => k += 2,
+                0xc0 | 0xd0 => k += 1,
+                _ => {
+                    if status == 0xff {
+                        k += 1;
+                    }
+                    let mut l = 0usize;
+                    loop {
+                        let b = track[k];
+                        k += 1;
+                        l = (l << 7) | usize::from(b & 0x7f);
+                        if b & 0x80 == 0 {
+                            break;
+                        }
+                    }
+                    k += l;
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn the_sostenuto_and_the_soft_pedal_are_read_and_written_under_the_staff() {
+    let src = r"{ c'4\sostenutoOn d'\unaCorda e'\sostenutoOff\sostenutoOn f'\sostenutoOff\treCorde }";
+    let p = parse(src).unwrap();
+    let notes: Vec<&Ev> = p.staves[0].events.iter().filter(|e| e.k == Kind::Note).collect();
+    assert_eq!(notes[0].pedals, vec![(66, true)]);
+    assert_eq!(notes[1].pedals, vec![(67, true)]);
+    assert_eq!(notes[2].pedals, vec![(66, false), (66, true)], "let go, then pressed again");
+    assert_eq!(notes[3].pedals, vec![(66, false), (67, false)]);
+    let words = |ev: &Ev| -> Vec<(u8, Vec<String>)> { ev.texts.iter().map(|w| (w.pedal, w.runs.iter().map(|r| r.text.clone()).collect())).collect() };
+    assert_eq!(words(notes[0]), vec![(66, vec!["Sost. Ped.".to_owned()])]);
+    assert_eq!(words(notes[1]), vec![(67, vec!["una corda".to_owned()])]);
+    assert_eq!(words(notes[2]), vec![(66, vec!["*".to_owned(), "Sost. Ped.".to_owned()])], "side by side, as \\sustainOff\\sustainOn");
+    assert_eq!(words(notes[3]), vec![(66, vec!["*".to_owned()]), (67, vec!["tre corde".to_owned()])]);
+    assert!(notes[0].texts[0].runs.iter().all(|r| r.weight == eui_score::glyphs::Weight::Italic && !r.glyph), "italic words, LilyPond's font-shape");
+    // Drawn under the staff, each at its note.
+    let e = eng(src);
+    let line = &e.systems[0].lines[0];
+    let placed = |t: &str| line.texts.iter().find(|tx| tx.runs.iter().any(|r| r.text == t)).unwrap_or_else(|| panic!("{t} not drawn"));
+    let items = items(&e);
+    for (t, at) in [("Sost. Ped.", 0), ("una corda", 1), ("tre corde", 3)] {
+        let tx = placed(t);
+        assert!(tx.y > 4.0, "{t}: under the staff ({})", tx.y);
+        assert!((tx.x0 - items[at].x).abs() < 1.0, "{t}: at its note");
+    }
+}
+
+#[test]
+fn the_sostenuto_is_controller_66_and_the_soft_pedal_67() {
+    let q = quarter(r"{ c'4 }");
+    let bytes = midi(r"{ c'4\sostenutoOn d'\unaCorda e'\sostenutoOff\sostenutoOn f'\sostenutoOff\treCorde }", &MidiOptions::default()).unwrap();
+    let pedals: Vec<(u32, u8, u8)> = controls(&bytes).into_iter().filter(|c| c.1 == 66 || c.1 == 67).collect();
+    assert_eq!(pedals, vec![(0, 66, 127), (q, 67, 127), (2 * q, 66, 0), (2 * q, 66, 127), (3 * q, 66, 0), (3 * q, 67, 0)]);
+}

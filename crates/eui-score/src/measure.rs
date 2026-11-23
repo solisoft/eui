@@ -271,6 +271,7 @@ fn cut_at_bar_lines(ev: &Ev, room: i64, length: i64) -> Option<Vec<Ev>> {
             piece.arpeggio = false;
             piece.pedal_on = false;
             piece.pedal_off = false;
+            piece.pedals.clear();
             piece.chord_name.clear();
             piece.unseen.clear();
         }

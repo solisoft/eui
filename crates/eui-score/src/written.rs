@@ -208,7 +208,7 @@ pub(crate) fn markings(ev: &Ev) -> usize {
         ev.breath.is_some(),
         ev.beam_on,
     ];
-    let mut n = flags.iter().filter(|f| **f).count();
+    let mut n = flags.iter().filter(|f| **f).count().saturating_add(ev.pedals.len());
     n = n.saturating_add(ev.scripts.len().saturating_mul(SCRIPT));
     n = n.saturating_add((usize::from(ev.slur_on) + usize::from(ev.phrase_on)) * SLUR);
     if let Some(d) = &ev.dynamic {

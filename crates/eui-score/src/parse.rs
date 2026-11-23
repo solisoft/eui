@@ -937,12 +937,16 @@ pub struct Words {
     /// What `\markup` makes of them: pieces in their own faces, and music
     /// glyphs. Empty for a plain string, which is `text` upright.
     pub runs: Vec<Run>,
+    /// A pedal's words, by its MIDI controller: 64 the sustain pedal's
+    /// "Ped.", 66 the sostenuto's "Sost. Ped.", 67 the soft pedal's "una
+    /// corda" (score #1026); 0 for words written.
+    pub pedal: u8,
 }
 
 impl Words {
     /// A plain string's words.
     pub fn plain(text: String, dir: i64) -> Self {
-        Words { text, dir, runs: Vec::new() }
+        Words { text, dir, runs: Vec::new(), pedal: 0 }
     }
 
     /// Its pieces: `runs`, or the string upright.
@@ -1155,6 +1159,10 @@ pub struct Ev {
     /// `\sustainOff`: let go with this note, "*" — before it is pressed
     /// again, when a note has both (`\sustainOff\sustainOn`).
     pub pedal_off: bool,
+    /// `\sostenutoOn`/`Off` (controller 66), `\unaCorda`/`\treCorde`
+    /// (67) with this note: each pedal and whether it is pressed, as
+    /// written; MIDI lets go before it presses again (score #1026).
+    pub pedals: Vec<(u8, bool)>,
     /// `c4:16`: the note repeated in sixteenths, strokes across its stem.
     pub tremolo: i64,
     /// `\repeat tremolo 4 { c16 e }` (score #1026): one of the two notes
@@ -2056,6 +2064,16 @@ pub(crate) fn scheme_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
 // writes: read whole, so the music after it reads, and passed over with a
 // warning; honoured where the engraver has the hook (`\stemUp`, `\autoBeamOff`,
 // a text spanner's words).
+
+/// A pedal's words under a note, `run` after what the same pedal says
+/// there already: let go and pressed again on one note, "* Ped." side by
+/// side.
+fn pedal_words(ev: &mut Ev, cc: u8, run: Run) {
+    match ev.texts.iter_mut().find(|w| w.dir > 0 && w.pedal == cc) {
+        Some(w) => w.runs.push(run),
+        None => ev.texts.push(Words { text: String::new(), dir: 1, runs: vec![run], pedal: cc }),
+    }
+}
 
 /// The commands that only switch a layout setting on or off, passed over.
 const SWITCHES: [&str; 96] = [
@@ -4255,7 +4273,7 @@ fn postfix(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         let (runs, j) = markup(toks, i + 2, nxt.at)?;
         let text = runs.iter().filter(|r| !r.glyph).map(|r| r.text.as_str()).collect::<Vec<_>>().join(" ");
         let last = last_item(&mut st.events, &tk)?;
-        last.texts.push(Words { text, dir, runs });
+        last.texts.push(Words { text, dir, runs, pedal: 0 });
         return Ok(j);
     }
     // `^(` `_(`, `^\(` `_\(`: a slur, a phrasing slur, forced above or below.
@@ -4754,12 +4772,22 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
                 last.pedal_off = true;
             }
             let glyph = if on { "keyboardPedalPed" } else { "keyboardPedalUp" };
-            // Let go and pressed again on one note: "* Ped." side by side.
-            let pedal = last.texts.iter_mut().find(|w| w.dir > 0 && w.runs.iter().any(|r| r.glyph && r.text.starts_with("keyboardPedal")));
-            match pedal {
-                Some(w) => w.runs.push(Run::glyph(glyph)),
-                None => last.texts.push(Words { text: String::new(), dir: 1, runs: vec![Run::glyph(glyph)] }),
-            }
+            pedal_words(last, 64, Run::glyph(glyph));
+            return Ok(i + 1);
+        }
+        "sostenutoOn" | "sostenutoOff" | "unaCorda" | "treCorde" => {
+            // The sostenuto pedal (controller 66) and the soft pedal (67),
+            // in LilyPond's text style, italic under the staff: "Sost. Ped."
+            // and "*", "una corda" and "tre corde" (score #1026).
+            let (cc, on, words) = match word {
+                "sostenutoOn" => (66, true, "Sost. Ped."),
+                "sostenutoOff" => (66, false, "*"),
+                "unaCorda" => (67, true, "una corda"),
+                _ => (67, false, "tre corde"),
+            };
+            let last = last_item(&mut st.events, &tk)?;
+            last.pedals.push((cc, on));
+            pedal_words(last, cc, Run::words(words, Weight::Italic));
             return Ok(i + 1);
         }
         "startTrillSpan" => {
@@ -4801,7 +4829,7 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
                 _ => return refuse(format!("\\{word} wants a string or \\markup"), tk.at),
             };
             let dir = if word == "textEndMark" { 1 } else { -1 };
-            st.events.push(Ev { k: Kind::Mark, texts: vec![Words { text: String::new(), dir, runs }], at: tk.at, ..Ev::default() });
+            st.events.push(Ev { k: Kind::Mark, texts: vec![Words { text: String::new(), dir, runs, pedal: 0 }], at: tk.at, ..Ev::default() });
             return Ok(j);
         }
         "harmonic" => {
@@ -4824,7 +4852,7 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
                     _ => return refuse("\\jump wants a string or \\markup", tk.at),
                 }
             };
-            st.events.push(Ev { k: Kind::Mark, texts: vec![Words { text: String::new(), dir: 1, runs }], at: tk.at, ..Ev::default() });
+            st.events.push(Ev { k: Kind::Mark, texts: vec![Words { text: String::new(), dir: 1, runs, pedal: 0 }], at: tk.at, ..Ev::default() });
             return Ok(j);
         }
         "mark" | "segnoMark" | "codaMark" => {
@@ -4838,7 +4866,7 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             let k = if is(toks, i + 1, T::Sym('#')) { i + 2 } else { i + 1 };
             let numbered = word == "mark" && (is_cmd(toks, k, "default") || is(toks, k, T::Num));
             let count = if numbered { st.marks } else { 0 };
-            st.events.push(Ev { k: Kind::Mark, texts: vec![Words { text: String::new(), dir: -1, runs }], count, at: tk.at, ..Ev::default() });
+            st.events.push(Ev { k: Kind::Mark, texts: vec![Words { text: String::new(), dir: -1, runs, pedal: 0 }], count, at: tk.at, ..Ev::default() });
             return Ok(j);
         }
         _ => {}
