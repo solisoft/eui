@@ -462,7 +462,7 @@ fn controls(bytes: &[u8]) -> Vec<(u32, u8, u8)> {
 
 #[test]
 fn the_sostenuto_and_the_soft_pedal_are_read_and_written_under_the_staff() {
-    let src = r"{ c'4\sostenutoOn d'\unaCorda e'\sostenutoOff\sostenutoOn f'\sostenutoOff\treCorde }";
+    let src = r"{ c'2\sostenutoOn d'\unaCorda e'\sostenutoOff\sostenutoOn f'\sostenutoOff\treCorde }";
     let p = parse(src).unwrap();
     let notes: Vec<&Ev> = p.staves[0].events.iter().filter(|e| e.k == Kind::Note).collect();
     assert_eq!(notes[0].pedals, vec![(66, true)]);
@@ -472,19 +472,70 @@ fn the_sostenuto_and_the_soft_pedal_are_read_and_written_under_the_staff() {
     let words = |ev: &Ev| -> Vec<(u8, Vec<String>)> { ev.texts.iter().map(|w| (w.pedal, w.runs.iter().map(|r| r.text.clone()).collect())).collect() };
     assert_eq!(words(notes[0]), vec![(66, vec!["Sost. Ped.".to_owned()])]);
     assert_eq!(words(notes[1]), vec![(67, vec!["una corda".to_owned()])]);
-    assert_eq!(words(notes[2]), vec![(66, vec!["*".to_owned(), "Sost. Ped.".to_owned()])], "side by side, as \\sustainOff\\sustainOn");
-    assert_eq!(words(notes[3]), vec![(66, vec!["*".to_owned()]), (67, vec!["tre corde".to_owned()])]);
+    assert_eq!(words(notes[2]), vec![(66, vec!["Sost. Ped.".to_owned()])], "let go by the bracket, pressed again in words");
+    assert_eq!(words(notes[3]), vec![(67, vec!["tre corde".to_owned()])], "no \"*\": the bracket's hook says it");
     assert!(notes[0].texts[0].runs.iter().all(|r| r.weight == eui_score::glyphs::Weight::Italic && !r.glyph), "italic words, LilyPond's font-shape");
     // Drawn under the staff, each at its note.
     let e = eng(src);
     let line = &e.systems[0].lines[0];
     let placed = |t: &str| line.texts.iter().find(|tx| tx.runs.iter().any(|r| r.text == t)).unwrap_or_else(|| panic!("{t} not drawn"));
-    let items = items(&e);
+    let at_notes = items(&e);
     for (t, at) in [("Sost. Ped.", 0), ("una corda", 1), ("tre corde", 3)] {
         let tx = placed(t);
         assert!(tx.y > 4.0, "{t}: under the staff ({})", tx.y);
-        assert!((tx.x0 - items[at].x).abs() < 1.0, "{t}: at its note");
+        assert!((tx.x0 - at_notes[at].x).abs() < 1.0, "{t}: at its note");
     }
+    // The sostenuto's 'mixed style: from after its words to the note it is
+    // let go with, hooked there; again from the words it is pressed with anew.
+    let src = r"{ c'1\sostenutoOn d'1 e'1\sostenutoOff\sostenutoOn f'1 g'1\sostenutoOff }";
+    let e = eng(src);
+    let line = &e.systems[0].lines[0];
+    let notes = items(&e);
+    let brackets = &line.pedal_brackets;
+    assert_eq!(brackets.len(), 2, "{brackets:?}");
+    let sost = line.texts.iter().filter(|tx| tx.runs.iter().any(|r| r.text == "Sost. Ped.")).collect::<Vec<_>>();
+    assert!(brackets[0].x0 > sost[0].x1 && (brackets[0].x1 - notes[2].x).abs() < 1e-9 && brackets[0].hook, "{brackets:?}");
+    assert!(brackets[1].x0 > sost[1].x1 && (brackets[1].x1 - notes[4].x).abs() < 1e-9 && brackets[1].hook, "{brackets:?}");
+    assert!(brackets.iter().all(|b| (b.y - sost[0].y).abs() < 1e-9), "on the words' baseline");
+    let (all, _) = paths(&e, 8.0, 0).unwrap();
+    let (plain, _) = paths(&eng(r"{ c'1 d'1 e'1 f'1 g'1 }"), 8.0, 0).unwrap();
+    assert!(all.len() > plain.len() + 4, "the brackets and their hooks drawn");
+}
+
+#[test]
+fn each_pedal_keeps_its_own_line_under_the_staff() {
+    // Sustain nearest the staff, then the sostenuto, then the soft pedal, each
+    // at one height along the line whatever stands over its words.
+    let src = r"{ c'4\sustainOn\sostenutoOn\unaCorda d' e'\sustainOff\sustainOn f' | c4\sustainOff\treCorde d'' a,, b'\sostenutoOff }";
+    let e = eng(src);
+    let line = &e.systems[0].lines[0];
+    let ys = |pick: &dyn Fn(&eui_score::marks::TextPlace) -> bool| -> Vec<f64> { line.texts.iter().filter(|tx| pick(tx)).map(|tx| tx.y).collect() };
+    let sustain = ys(&|tx| tx.runs.iter().any(|r| r.glyph && r.text.starts_with("keyboardPedal")));
+    let sost = ys(&|tx| tx.runs.iter().any(|r| r.text == "Sost. Ped."));
+    let corda = ys(&|tx| tx.runs.iter().any(|r| r.text == "una corda" || r.text == "tre corde"));
+    assert_eq!(sustain.len(), 3);
+    assert_eq!(corda.len(), 2);
+    for set in [&sustain, &corda] {
+        assert!(set.iter().all(|y| (y - set[0]).abs() < 1e-9), "one height along the line: {set:?}");
+    }
+    assert!(sustain[0] < sost[0] && sost[0] < corda[0], "{} {} {}", sustain[0], sost[0], corda[0]);
+    // Under the low note in the line, not into it.
+    let lowest = items(&e).iter().map(|ev| ev.reach_down.unwrap_or(4.0)).fold(4.0, f64::max);
+    let top_of_pedals = line.texts.iter().filter(|tx| tx.dir > 0).map(|tx| tx.top).fold(f64::MAX, f64::min);
+    assert!(top_of_pedals > lowest, "{top_of_pedals} under {lowest}");
+}
+
+#[test]
+fn a_sostenuto_held_over_a_line_break_goes_on_from_the_next_line_start() {
+    let src = r"{ c'1\sostenutoOn \break d'1 e'1\sostenutoOff }";
+    let e = eng(src);
+    let first = &e.systems[0].lines[0];
+    let second = &e.systems[1].lines[0];
+    assert_eq!(first.pedal_brackets.len(), 1);
+    assert!(!first.pedal_brackets[0].hook, "not let go on the first line");
+    assert_eq!(second.pedal_brackets.len(), 1);
+    assert!(second.pedal_brackets[0].hook);
+    assert!(second.texts.iter().all(|tx| !tx.runs.iter().any(|r| r.text == "Sost. Ped.")), "the words once, where it is pressed");
 }
 
 #[test]

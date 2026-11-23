@@ -661,14 +661,21 @@ construct as LilyPond 2.25 draws it:
   `\partCombineUp` and `\partCombineDown` set a pair's stems, two pairs
   sharing a staff in four voices. The MIDI plays both parts.
 - *Signs an engraver is expected to know* (score #1026):
+  the ornaments `\reverseturn`, `\prallprall`, `\prallmordent`,
+  `\upprall`, `\lineprall`, the fermatas `\veryshortfermata`,
+  `\shortfermata`, `\longfermata`, `\verylongfermata`,
+  `\henzeshortfermata`, `\henzelongfermata` (each holding for its length)
+  and `\snappizzicato`; `\arpeggioArrowUp` / `\arpeggioArrowDown` (a down
+  arrow rolls from the top);
   `\arpeggioBracket` (a bracket; the chord played together),
   `\arpeggioParenthesis` (a curve; rolled) and `\arpeggioNormal`; the
   two-note tremolo `\repeat tremolo n { c16 e }`, each note drawn as long
   as the whole tremolo, the written value's beams between them (short of
   half and whole notes' stems), the notes played in turn, and
   `\repeat tremolo n c16`, one note, as `c4:16`; `\sostenutoOn` /
-  `\sostenutoOff` ("Sost. Ped." and "*", controller 66) and `\unaCorda` /
-  `\treCorde` (controller 67), in italics under the staff; the lyric
+  `\sostenutoOff` ("Sost. Ped." and a bracket to its release, controller
+  66) and `\unaCorda` / `\treCorde` (controller 67), in italics, each pedal
+  on its own line under the staff; the lyric
   elision `e~a` / `e ~ a`, two syllables on one note joined by a tie under
   them; `\new RhythmicStaff`, one line, every note on it, stems up, no
   clef, key or accidental, played as written.

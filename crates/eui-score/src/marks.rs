@@ -174,6 +174,21 @@ pub struct TextPlace {
     pub index: usize,
 }
 
+/// A piece of the sostenuto pedal's bracket on a line (score #1026): its
+/// horizontal from `x0` to `x1` on `y`, and the hook up at its end where the
+/// pedal is let go there.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PedalBracket {
+    /// Its left.
+    pub x0: f64,
+    /// Its right.
+    pub x1: f64,
+    /// Its line, in the staff's frame.
+    pub y: f64,
+    /// Let go at `x1`: a hook up there.
+    pub hook: bool,
+}
+
 /// A text spanner on one line: its words (on the line it starts on), then
 /// a dashed line.
 #[derive(Debug, Clone, PartialEq)]
@@ -629,11 +644,13 @@ pub(crate) fn points(cmds: &[f64]) -> Vec<(f64, f64)> {
 /// Everything around a staff's notes, line by line.
 pub(crate) fn marks(bars: &mut [Bar], lines: &mut [Line]) {
     hairpins(bars, lines);
-    for line in lines.iter_mut() {
+    let brackets = sostenuto_spans(bars, lines);
+    for (li, line) in lines.iter_mut().enumerate() {
         line.tuplets = tuplets(bars, line);
         scripts(bars, line);
         dynamics(bars, line);
         texts(bars, line);
+        pedal_lines(bars, line, brackets.get(li).map_or(&[][..], Vec::as_slice));
         // After what stands above the staff: a bracket goes over the words,
         // the scripts and the tuplets under it, as LilyPond's
         // `outside-staff-priority` puts a VoltaBracket over TextScripts.
@@ -1541,9 +1558,12 @@ fn texts(bars: &[Bar], line: &mut Line) {
     for b in line.bars.clone() {
         for ev in &bars[b].items {
             for (index, tx) in ev.texts.iter().enumerate() {
+                // A pedal's words are on the pedal's own line ([`pedal_lines`]).
+                if tx.pedal > 0 {
+                    continue;
+                }
                 let runs = tx.pieces();
-                // A pedal's "Ped." is no TextScript: the settings are the words'.
-                let look = if tx.pedal > 0 { crate::look::Look::default() } else { ev.look.clone() };
+                let look = ev.look.clone();
                 if look.omitted("TextScript") {
                     continue;
                 }
@@ -1629,6 +1649,96 @@ fn texts(bars: &[Bar], line: &mut Line) {
             }
         }
     }
+}
+
+/// The pedals' lines under a staff, as LilyPond's SustainPedalLineSpanner,
+/// SostenutoPedalLineSpanner and UnaCordaPedalLineSpanner stack them
+/// (score #1026): under everything else the line has below the staff, each
+/// pedal at one height along the whole line — the sustain pedal's nearest,
+/// then the sostenuto's, then the soft pedal's — their words at their notes,
+/// and the sostenuto's brackets (`spans`, from [`sostenuto_spans`]) on its
+/// words' baseline.
+fn pedal_lines(bars: &[Bar], line: &mut Line, spans: &[(f64, f64, bool)]) {
+    line.pedal_brackets = Vec::new();
+    let e = em(0.0);
+    let mut edge: f64 = 4.5;
+    for b in line.bars.clone() {
+        for ev in &bars[b].items {
+            edge = edge.max(ev.reach_down.unwrap_or(4.0));
+        }
+    }
+    for dy in &line.dynamics {
+        edge = edge.max(dy.bottom);
+    }
+    for tx in &line.texts {
+        if tx.dir > 0 {
+            edge = edge.max(tx.bottom);
+        }
+    }
+    for c in &line.curves {
+        for (_, py) in points(c) {
+            edge = edge.max(py);
+        }
+    }
+    for cc in [64u8, 66, 67] {
+        let mut words: Vec<(&Ev, usize, Vec<Run>)> = Vec::new();
+        for b in line.bars.clone() {
+            for ev in &bars[b].items {
+                for (index, tx) in ev.texts.iter().enumerate() {
+                    if tx.pedal == cc && tx.dir > 0 {
+                        words.push((ev, index, tx.pieces()));
+                    }
+                }
+            }
+        }
+        if words.is_empty() && (cc != 66 || spans.is_empty()) {
+            continue;
+        }
+        let mut bx = if cc == 66 { runs_box(&[Run::words("Sost. Ped.", Weight::Italic)], e) } else { (0.0, 0.0) };
+        for (_, _, runs) in &words {
+            let b = runs_box(runs, e);
+            bx = (bx.0.min(b.0), bx.1.max(b.1));
+        }
+        let y = edge + 0.45 - bx.0;
+        for (ev, index, runs) in words {
+            let w = runs_width(&runs, e);
+            line.texts.push(TextPlace { text: String::new(), runs, x0: ev.x, x1: ev.x + w, y, top: y + bx.0, bottom: y + bx.1, dir: 1, em: e, item: ev.i, index });
+        }
+        if cc == 66 {
+            line.pedal_brackets = spans.iter().map(|&(x0, x1, hook)| PedalBracket { x0, x1, y, hook }).collect();
+        }
+        edge = y + bx.1.max(0.1) + 0.3;
+    }
+}
+
+/// Where the sostenuto pedal's brackets go, line by line (score #1026): from
+/// after the "Sost. Ped." it is pressed with — or from a line's start, when
+/// it is held over the line break — to the note it is let go with, hooked
+/// there, or to the line's end. LilyPond's 'mixed style.
+fn sostenuto_spans(bars: &[Bar], lines: &[Line]) -> Vec<Vec<(f64, f64, bool)>> {
+    let words = runs_width(&[Run::words("Sost. Ped.", Weight::Italic)], em(0.0));
+    let mut out = vec![Vec::new(); lines.len()];
+    let mut open: Option<f64> = None;
+    for (li, line) in lines.iter().enumerate() {
+        if open.is_some() {
+            open = Some(line.prefix);
+        }
+        let mut evs: Vec<&Ev> = line.bars.clone().flat_map(|b| bars[b].items.iter()).filter(|ev| ev.pedals.iter().any(|p| p.0 == 66)).collect();
+        evs.sort_by(|a, b| a.bar.cmp(&b.bar).then(a.start.cmp(&b.start)));
+        for ev in evs {
+            for &(_, on) in ev.pedals.iter().filter(|p| p.0 == 66) {
+                if on {
+                    open = Some(ev.x + words + 0.3);
+                } else if let Some(x0) = open.take() {
+                    out[li].push((x0, ev.x.max(x0), true));
+                }
+            }
+        }
+        if let Some(x0) = open {
+            out[li].push((x0, line.right.max(x0), false));
+        }
+    }
+    out
 }
 
 /// The line the syllables stand on: 0.6 under everything the staff has
@@ -1841,6 +1951,9 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
         if tx.dir > 0 {
             lo = lo.max(tx.bottom);
         }
+    }
+    for br in &line.pedal_brackets {
+        lo = lo.max(br.y + 0.2);
     }
     for b in range {
         if bars[b].items.first().is_some_and(|ev| ev.mm.is_some()) {

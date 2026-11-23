@@ -1016,6 +1016,15 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     for sp in &line.spans {
         draw_span(&mut pen, sp, top);
     }
+    // The sostenuto's brackets (score #1026): a line on its words'
+    // baseline, hooked up where the pedal is let go.
+    for br in &line.pedal_brackets {
+        let t = RULE.staff;
+        pen.rect(br.x0, top + br.y - t, br.x1 - br.x0, t);
+        if br.hook {
+            pen.rect(br.x1 - t, top + br.y - PEDAL_HOOK, t, PEDAL_HOOK);
+        }
+    }
     if let (Some((piece, opus)), Some(y)) = (&line.title, line.title_y) {
         let e = em(0.0);
         pen.text(piece, Weight::Regular, line.title_x.0, top + y, e);
@@ -2032,6 +2041,9 @@ fn draw_arp_arrow(pen: &mut Pen, x: f64, y0: f64, y1: f64, up: bool) {
         }
     }
 }
+
+/// How high the sostenuto bracket's hook rises where the pedal is let go.
+const PEDAL_HOOK: f64 = 1.0;
 
 /// How far a whole note's tremolo strokes start from its head's middle.
 const TREMOLO_OFF_HEAD: f64 = 1.4;

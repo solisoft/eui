@@ -179,9 +179,13 @@ release. A wire change lands here first, is released, and then the pin moves.
   in turn in sixteenths. `\repeat tremolo 4 c16`, one note,
   is `c4:16`.
 - A score reads the other two piano pedals, which were refused (score
-  #1026): `\sostenutoOn` and `\sostenutoOff`, "Sost. Ped." and "*", and
-  `\unaCorda` and `\treCorde`, in italics under the staff as LilyPond's
-  text style writes them; played as MIDI controllers 66 and 67.
+  #1026): `\sostenutoOn` and `\sostenutoOff`, "Sost. Ped." and a bracket
+  to where it is let go, hooked there (LilyPond's default 'mixed style),
+  and `\unaCorda` and `\treCorde`, "una corda" and "tre corde"; played as
+  MIDI controllers 66 and 67. Each pedal has its own line under the staff,
+  at one height along the system — the sustain pedal's nearest, then the
+  sostenuto's, then the soft pedal's — as LilyPond's pedal line spanners
+  stack them.
 - Lyrics read the elision, `e~a` or `e ~ a` (score #1026): two syllables
   sung on one note, joined by Emmentaler's lyric tie under them (the short
   one around a single letter) with half a word space either side, as

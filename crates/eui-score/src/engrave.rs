@@ -90,6 +90,9 @@ pub struct Line {
     pub kind: StaffKind,
     /// Text spanners, `\startTextSpan` … `\stopTextSpan`.
     pub spans: Vec<SpanPlace>,
+    /// The sostenuto pedal's brackets on this line, after its "Sost. Ped."
+    /// (score #1026).
+    pub pedal_brackets: Vec<crate::marks::PedalBracket>,
     /// Left out of its system: an empty staff `\RemoveEmptyStaves` removes.
     pub hidden: bool,
     /// The title over it when a movement starts with it: `piece`, `opus`.

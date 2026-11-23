@@ -4828,17 +4828,21 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         }
         "sostenutoOn" | "sostenutoOff" | "unaCorda" | "treCorde" => {
             // The sostenuto pedal (controller 66) and the soft pedal (67),
-            // in LilyPond's text style, italic under the staff: "Sost. Ped."
-            // and "*", "una corda" and "tre corde" (score #1026).
+            // italic under the staff as LilyPond's defaults set them: the
+            // sostenuto in its 'mixed style, "Sost. Ped." and a bracket to
+            // where it is let go (`marks::pedal_brackets`); the soft pedal
+            // in its 'text style, "una corda" and "tre corde" (score #1026).
             let (cc, on, words) = match word {
-                "sostenutoOn" => (66, true, "Sost. Ped."),
-                "sostenutoOff" => (66, false, "*"),
-                "unaCorda" => (67, true, "una corda"),
-                _ => (67, false, "tre corde"),
+                "sostenutoOn" => (66, true, Some("Sost. Ped.")),
+                "sostenutoOff" => (66, false, None),
+                "unaCorda" => (67, true, Some("una corda")),
+                _ => (67, false, Some("tre corde")),
             };
             let last = last_item(&mut st.events, &tk)?;
             last.pedals.push((cc, on));
-            pedal_words(last, cc, Run::words(words, Weight::Italic));
+            if let Some(words) = words {
+                pedal_words(last, cc, Run::words(words, Weight::Italic));
+            }
             return Ok(i + 1);
         }
         "startTrillSpan" => {
