@@ -711,6 +711,7 @@ fn kneed(g: &[At], all: &[Vec<Bar>], offs: &[f64], scales: &[f64]) -> Option<(Kn
         origin: -offs[notes[0].0],
         lines: &lines,
         staff: None,
+        obstacles: &[],
     };
     let (yl, yr) = crate::quanting::place(&qstems, &spec);
     let slope = -(yr - yl) / dx;

@@ -8,6 +8,14 @@
 //! and the cheapest one taken. A concave beam (an inner note nearer the
 //! beam than both ends) is flat.
 //!
+//! What else stands between a beam's ends (score #1019, LilyPond's beam
+//! collisions) — another voice's heads, accidentals, stems and flags, a
+//! clef changed in the middle of the bar, another beam — is given as boxes
+//! ([`QObstacle`]): the beam is first moved past the small ones, away from
+//! its heads, by the least that leaves half a space of white; then a place
+//! in or within half a space of any of them costs, and places further off
+//! are tried. Given none, a beam is where its stems alone put it.
+//!
 //! Lengths in staff spaces, y up (LilyPond's sense), from whatever origin
 //! the caller gives; a staff's lines are at whole spaces from `origin`.
 
@@ -31,6 +39,16 @@ const IDEAL_SLOPE_FACTOR: f64 = 10.0;
 const ROUND_TO_ZERO_SLOPE: f64 = 0.02;
 const HORIZONTAL_INTER_QUANT_PENALTY: f64 = 500.0;
 const REGION_SIZE: i64 = 2;
+/// A beam drawn through something, or nearer it than `COLLISION_PADDING`.
+const COLLISION_PENALTY: f64 = 500.0;
+const COLLISION_PADDING: f64 = 0.5;
+/// What is shorter than this a beam is moved clear of before it is scored
+/// (`shift_region_to_valid`'s `min_y_size`): a head, an accidental, another
+/// beam — not a stem or a clef, which the scores keep it from.
+const SHIFT_UNDER: f64 = 2.0;
+/// … and no further than this: past it the beam stays, and the scores
+/// find the least bad place.
+const SHIFT_LIMIT: f64 = 4.0;
 const EPS: f64 = 1e-3;
 
 /// A stem under the beam.
@@ -45,6 +63,23 @@ pub(crate) struct QStem {
     /// How far its beams reach from the outermost one's middle towards its
     /// head, to their inner edge.
     pub stack: f64,
+}
+
+/// Something a beam is kept from (LilyPond's `Beam.collision-interfaces`):
+/// its box, y up in the stems' frame.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct QObstacle {
+    /// Its left edge.
+    pub x0: f64,
+    /// Its right edge.
+    pub x1: f64,
+    /// Its bottom.
+    pub y0: f64,
+    /// Its top.
+    pub y1: f64,
+    /// How much a beam through it costs: 1, and LilyPond's
+    /// `STEM_COLLISION_FACTOR` (0.1) for a stem that has a beam of its own.
+    pub weight: f64,
 }
 
 /// What shapes a beam besides its stems.
@@ -71,6 +106,9 @@ pub(crate) struct QBeam<'a> {
     /// The staff's middle line and its outer lines (bottom, top), which a
     /// beam in one staff reaches to; none for a beam across two staves.
     pub staff: Option<(f64, f64, f64)>,
+    /// What stands between its ends, that it is kept from; none, and the
+    /// beam is where its stems alone put it. A kneed beam keeps from nothing.
+    pub obstacles: &'a [QObstacle],
 }
 
 /// `shrink_extra_weight`: a shortfall costs `fac` times more.
@@ -188,6 +226,57 @@ pub(crate) fn place(stems: &[QStem], b: &QBeam<'_>) -> (f64, f64) {
     } else if drop > 0.0 && lift <= 0.0 {
         pos = (pos.0 - drop, pos.1 - drop);
     }
+    // What it must keep from: each obstacle at its two edges, as far as they
+    // are under the beam — where along the beam, its bottom, its top, its
+    // weight. And the beams' own ink about the outermost one's middle.
+    let d = stems[0].dir;
+    let same_side = stems.iter().all(|s| s.dir == d);
+    let mut hits: Vec<(f64, f64, f64, f64)> = Vec::new();
+    if same_side && dx > 1e-9 {
+        for o in b.obstacles.iter().filter(|o| o.x1 > x0 && o.x0 < x0 + dx) {
+            for x in [o.x0.max(x0), o.x1.min(x0 + dx)] {
+                hits.push(((x - x0) / dx, o.y0, o.y1, o.weight));
+            }
+        }
+    }
+    let reach = half + (b.count.max(1) - 1) as f64 * b.step;
+    let ink = if d > 0.0 { (-reach, half) } else { (-half, reach) };
+    // How far a beam at `y` is from each of them, the nearer the dearer.
+    let collisions = |y: (f64, f64)| -> f64 {
+        let mut score = 0.0;
+        for &(t, low, high, weight) in &hits {
+            let m = y.0 + (y.1 - y.0) * t;
+            let dist = (low - (m + ink.1)).max((m + ink.0) - high).max(0.0);
+            score += COLLISION_PENALTY * weight * (COLLISION_PADDING - dist).max(0.0) / COLLISION_PADDING;
+        }
+        score
+    };
+    // Moved clear of the small ones, away from its heads — the stems only
+    // longer for it — by the least that leaves `COLLISION_PADDING` of white.
+    if !hits.is_empty() {
+        let spans: Vec<(f64, f64)> = hits
+            .iter()
+            .filter(|h| h.2 - h.1 < SHIFT_UNDER)
+            .map(|&(t, low, high, _)| {
+                let m = pos.0 + (pos.1 - pos.0) * t;
+                let (bottom, top) = (m + ink.0 - COLLISION_PADDING, m + ink.1 + COLLISION_PADDING);
+                if d > 0.0 {
+                    (low - top, high - bottom)
+                } else {
+                    (bottom - high, top - low)
+                }
+            })
+            .collect();
+        let mut shift: f64 = 0.0;
+        while let Some(&(_, end)) = spans.iter().find(|sp| sp.0 < shift - 1e-9 && shift < sp.1 - 1e-9) {
+            shift = end;
+        }
+        if shift > 0.0 && shift <= SHIFT_LIMIT {
+            pos = (pos.0 + d * shift, pos.1 + d * shift);
+        }
+    }
+    // Something still in the way: places further off are tried too.
+    let region = if collisions(pos) > 0.0 { REGION_SIZE + 2 } else { REGION_SIZE };
     let damped_dy = pos.1 - pos.0;
     let xstaff = b.staff.is_none();
     // The quants: on a line, sitting on it, half way, hanging from it.
@@ -195,8 +284,8 @@ pub(crate) fn place(stems: &[QStem], b: &QBeam<'_>) -> (f64, f64) {
     let quants = [0.0, sit, 0.5, 1.0 - sit];
     let grid = |y: f64| -> Vec<f64> {
         let base = (y - b.origin).floor();
-        let mut out = Vec::with_capacity(quants.len() * (2 * REGION_SIZE as usize + 1));
-        for i in -REGION_SIZE..=REGION_SIZE {
+        let mut out = Vec::with_capacity(quants.len() * (2 * region as usize + 1));
+        for i in -region..=region {
             for q in quants {
                 out.push(b.origin + base + i as f64 + q);
             }
@@ -246,6 +335,12 @@ pub(crate) fn place(stems: &[QStem], b: &QBeam<'_>) -> (f64, f64) {
         }
         if cut {
             continue;
+        }
+        if !hits.is_empty() {
+            score += collisions((yl, yr));
+            if score >= best.0 {
+                continue;
+            }
         }
         {
             // No staff line in a thin wedge of white inside a beam's edge.
@@ -331,4 +426,87 @@ fn knee_fit(stems: &[QStem], infos: &[(f64, f64)], x0: f64) -> (f64, f64) {
     };
     let (a, s, c) = (solve(0), solve(1), solve(2));
     (s, a + c / 2.0)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+    use super::*;
+
+    const LINES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
+
+    fn spec(count: i64, obstacles: &[QObstacle]) -> QBeam<'_> {
+        QBeam { count, edge_counts: (count, count), thick: 0.48, step: 0.75, line: 0.1, scale: 1.0, damping: 1.0, origin: 0.0, lines: &LINES, staff: Some((0.0, -2.0, 2.0)), obstacles }
+    }
+
+    fn stems(heads: &[f64], dir: f64, count: i64) -> Vec<QStem> {
+        heads.iter().enumerate().map(|(k, &head)| QStem { x: 3.0 * k as f64, head, dir, stack: 0.24 + (count - 1) as f64 * 0.75 }).collect()
+    }
+
+    /// With nothing to keep from, a beam is where its stems alone put it:
+    /// the places LilyPond's quanting chose before a beam knew of anything
+    /// else (score #1019), to the hundredth.
+    #[test]
+    fn a_beam_with_no_obstacle_is_where_it_was() {
+        // Heads, the stems' side, the beams, and where the beam was.
+        type Case<'a> = (&'a [f64], f64, i64, (f64, f64));
+        let cases: [Case<'_>; 6] = [
+            (&[-3.0, -2.0], 1.0, 1, (0.19, 0.81)),
+            (&[-1.0, 0.5, 1.0, -0.5], 1.0, 1, (3.5, 3.5)),
+            (&[1.5, 2.5, 0.5], -1.0, 2, (-2.81, -3.5)),
+            (&[-0.5, -1.0, -1.5, -2.0], 1.0, 2, (2.81, 1.81)),
+            (&[3.0, 0.0], -1.0, 1, (-1.81, -3.19)),
+            (&[0.0, 0.0, 0.5], 1.0, 3, (4.19, 4.5)),
+        ];
+        for (heads, dir, count, was) in cases {
+            let at = place(&stems(heads, dir, count), &spec(count, &[]));
+            assert!((at.0 - was.0).abs() < 1e-9 && (at.1 - was.1).abs() < 1e-9, "{heads:?}: {at:?}, it was {was:?}");
+            // … and something far from it changes nothing.
+            let far = [QObstacle { x0: 1.0, x1: 2.0, y0: dir * -9.0 - 0.5, y1: dir * -9.0 + 0.5, weight: 1.0 }];
+            assert_eq!(place(&stems(heads, dir, count), &spec(count, &far)), at);
+        }
+    }
+
+    /// A head in a beam's way: the beam goes past it, away from its own
+    /// heads, half a space clear — and comes back to a quant no nearer.
+    #[test]
+    fn a_beam_goes_past_a_head_in_its_way() {
+        // Stems up from -3 and -2: the beam at 0.19 .. 0.81; a head at 0.5.
+        let head = [QObstacle { x0: 1.0, x1: 2.2, y0: 0.0, y1: 1.0, weight: 1.0 }];
+        let (l, r) = place(&stems(&[-3.0, -2.0], 1.0, 1), &spec(1, &head));
+        for x in [1.0, 2.2] {
+            let bottom = l + (r - l) * x / 3.0 - 0.24;
+            assert!(bottom >= 1.0 + COLLISION_PADDING - 1e-9, "the beam's lower edge at {bottom}, the head's top at 1");
+        }
+        // Stems down, the same picture upside down.
+        let head = [QObstacle { x0: 1.0, x1: 2.2, y0: -1.0, y1: 0.0, weight: 1.0 }];
+        let (l, r) = place(&stems(&[3.0, 2.0], -1.0, 1), &spec(1, &head));
+        for x in [1.0, 2.2] {
+            let top = l + (r - l) * x / 3.0 + 0.24;
+            assert!(top <= -1.0 - COLLISION_PADDING + 1e-9, "the beam's upper edge at {top}, the head's bottom at -1");
+        }
+    }
+
+    /// Two beams keep both of them clear, the inner one too; and no stem is
+    /// shorter for it than it was.
+    #[test]
+    fn a_second_beam_clears_it_too_and_no_stem_is_shorter() {
+        let head = [QObstacle { x0: 0.5, x1: 1.7, y0: 0.6, y1: 1.6, weight: 1.0 }];
+        let free = place(&stems(&[-2.0, -2.0], 1.0, 2), &spec(2, &[]));
+        let (l, r) = place(&stems(&[-2.0, -2.0], 1.0, 2), &spec(2, &head));
+        assert!(l >= free.0 && r >= free.1, "{l} {r}, without the head {free:?}");
+        let inner = l.min(r) - 0.24 - 0.75;
+        assert!(inner >= 1.6 + COLLISION_PADDING - 1e-9, "the inner beam's lower edge at {inner}, the head's top at 1.6");
+    }
+
+    /// A tall thing — a clef — is not gone past at once: the scores keep
+    /// the beam off it, places further away being tried, and weigh the last
+    /// tenth of the padding against the stems' length.
+    #[test]
+    fn a_beam_keeps_off_a_clef_by_its_score() {
+        let clef = [QObstacle { x0: 1.0, x1: 2.0, y0: -1.2, y1: 1.3, weight: 1.0 }];
+        let (l, r) = place(&stems(&[-3.0, -2.5], 1.0, 1), &spec(1, &clef));
+        let bottom = l.min(r) - 0.24;
+        assert!(bottom >= 1.3 + COLLISION_PADDING - 0.1, "the beam's lower edge at {bottom}, the clef's top at 1.3");
+    }
 }

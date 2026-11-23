@@ -333,6 +333,8 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
         }
         // In the order of their first notes, as the drawing meets them.
         all.sort_by_key(|g| g[0]);
+        // Each beam's side, where `\stemUp` or `\stemDown` told it.
+        let mut told: Vec<Option<bool>> = Vec::new();
         for g in all {
             let mut lowest = 0;
             let mut highest = 0;
@@ -364,6 +366,7 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
                 up = bar.items[g[0]].stem_dir > 0;
             }
             let gi = bar.beams.len();
+            told.push((bar.items[g[0]].stem_dir != 0).then_some(up));
             for &j in &g {
                 bar.items[j].beam = Some(gi);
                 bar.items[j].up = up;
@@ -381,6 +384,11 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
             }
             if ev.stem_dir != 0 && ev.beam.is_none() {
                 ev.up = ev.stem_dir > 0;
+            }
+            // Under a beam told its side (`\stemDown` in a first voice):
+            // the stems go to the beam.
+            if let Some(&up) = ev.beam.and_then(|gi| told.get(gi)).and_then(Option::as_ref) {
+                ev.up = up;
             }
         }
     }
@@ -1691,10 +1699,105 @@ pub(crate) fn stems_beams(bars: &mut [Bar]) {
                 stem(ev);
             }
         }
+        // Each beam past the heads, the accidentals, the stems and the clefs
+        // under it; then, where a bar has several, each again, seeing the
+        // others where the first pass left them — the later ones where the
+        // second has put the earlier.
+        let mut placed = vec![false; bar.beams.len()];
         for gi in 0..bar.beams.len() {
-            beam(bar, gi);
+            beam(bar, gi, &placed);
+        }
+        if bar.poly && bar.beams.len() > 1 {
+            placed.fill(true);
+            for gi in 0..bar.beams.len() {
+                beam(bar, gi, &placed);
+            }
         }
     }
+}
+
+/// As far as a stem goes, to a beam that is kept from it: on and on.
+const STEM_WAY: f64 = 1000.0;
+
+/// What beam `gi` is kept from (LilyPond's `Beam.collision-interfaces`):
+/// between its ends, the heads, accidentals, stems and flags of the notes
+/// that are not its own, a clef, a key or a metre changed in the middle of
+/// the bar, and the other beams `placed`, with their stems — as boxes, y up
+/// from the middle line.
+fn beam_obstacles(bar: &Bar, gi: usize, placed: &[bool]) -> Vec<crate::quanting::QObstacle> {
+    use crate::quanting::QObstacle;
+    let mut out: Vec<QObstacle> = Vec::new();
+    let Some(own) = bar.beams.get(gi) else { return out };
+    let (Some(first), Some(last)) = (own.notes.first().and_then(|&j| bar.items.get(j)), own.notes.last().and_then(|&j| bar.items.get(j))) else { return out };
+    let (xa, xb) = (stem_x(first), stem_x(last));
+    // A box, y down in the staff's frame, kept when it is under the beam.
+    let mut add = |x0: f64, x1: f64, top: f64, bottom: f64, weight: f64| {
+        if x1 > xa + 1e-6 && x0 < xb - 1e-6 {
+            out.push(QObstacle { x0, x1, y0: 2.0 - bottom.max(top), y1: 2.0 - top.min(bottom), weight });
+        }
+    };
+    for (j, ev) in bar.items.iter().enumerate() {
+        // A clef, a key, a metre before a note, the beam's own too.
+        if let Some(cx) = ev.change_x {
+            let mut x = ev.x + cx;
+            if let Some(c) = ev.clef_change {
+                let g = glyph(clef_change_glyph(c));
+                let y = y_of(c.line);
+                add(x + g.bbox[0], x + g.bbox[2], y + g.bbox[1], y + g.bbox[3], 1.0);
+                x += g.advance + 0.6;
+            }
+            // The signs of a key and the figures of a metre: the staff's height.
+            let rest = mid_change_width(None, ev.key_change, ev.time_change);
+            if rest > 0.0 {
+                add(x, x + rest - 0.6, -1.0, 5.0, 1.0);
+            }
+        }
+        if ev.k != Kind::Note || ev.spacer || ev.percent.is_some() || own.notes.contains(&j) {
+            continue;
+        }
+        let hw = ev.head_w.unwrap_or(0.0);
+        for hd in &ev.heads {
+            let (x, y) = (ev.x + hd.side as f64 * (hw - RULE.stem), y_of(hd.pos));
+            add(x, x + hw, y - 0.5, y + 0.5, 1.0);
+            if let Some(acc) = hd.acc {
+                let g = glyph(acc_name(acc));
+                let ax = ev.x + hd.acc_x.unwrap_or(0.0);
+                let right = if hd.paren { paren_width(acc) } else { g.bbox[2] };
+                add(ax + g.bbox[0].min(0.0), ax + right, y + g.bbox[1], y + g.bbox[3], 1.0);
+            }
+        }
+        // Its stem, as LilyPond counts one: from the chord's far head on
+        // and on the stem's way, so that a beam is drawn to a stem's foot
+        // side or not at all past it — never over its tip. A stem that has
+        // a beam of its own weighs a tenth (`STEM_COLLISION_FACTOR`).
+        let beamed = ev.beam.is_some();
+        if ev.base < 2 || ev.xbeam || ev.span_stem {
+            continue;
+        }
+        let far = if ev.up { ev.heads.first() } else { ev.heads.last() }.map_or(0, |h| h.pos);
+        let sx = stem_x(ev) - if ev.up { RULE.stem } else { 0.0 };
+        add(sx, sx + RULE.stem, y_of(far), if ev.up { -STEM_WAY } else { STEM_WAY }, if beamed { 0.1 } else { 1.0 });
+        if !beamed && flags(ev.base) > 0 {
+            let g = glyph(&flag_name(ev.base, ev.up));
+            let k = mag(ev);
+            add(sx, sx + g.advance * k, ev.stem_end + g.bbox[1] * k, ev.stem_end + g.bbox[3] * k, 1.0);
+        }
+    }
+    // The other beams: a box between each two of its stems.
+    for (other, g) in bar.beams.iter().enumerate() {
+        if other == gi || !placed.get(other).copied().unwrap_or(false) {
+            continue;
+        }
+        let k = g.notes.first().and_then(|&j| bar.items.get(j)).map_or(1.0, mag);
+        let deep = (RULE.beam + (g.n - 1) as f64 * RULE.beam_step) * k * if g.up { 1.0 } else { -1.0 };
+        let xs: Vec<f64> = g.notes.iter().filter_map(|&j| bar.items.get(j)).map(stem_x).collect();
+        for pair in xs.windows(2) {
+            let (Some(&x0), Some(&x1)) = (pair.first(), pair.last()) else { continue };
+            let (y0, y1) = (beam_y(g, x0), beam_y(g, x1));
+            add(x0, x1, y0.min(y1).min(y0.min(y1) + deep), y0.max(y1).max(y0.max(y1) + deep), 1.0);
+        }
+    }
+    out
 }
 
 /// How large a note is drawn: LilyPond's magnification, 2^(size/6).
@@ -1740,7 +1843,7 @@ pub(crate) fn stem_x(ev: &Ev) -> f64 {
 
 /// A beam's place, as LilyPond's beam quanting chooses it
 /// ([`crate::quanting`]): its outer edge at its first and last stems.
-fn beam(bar: &mut Bar, gi: usize) {
+fn beam(bar: &mut Bar, gi: usize, placed: &[bool]) {
     let notes = bar.beams[gi].notes.clone();
     let up = bar.beams[gi].up;
     let n_beams = notes.iter().fold(0, |acc, &j| acc.max(flags(bar.items[j].base))).max(1);
@@ -1758,6 +1861,7 @@ fn beam(bar: &mut Bar, gi: usize) {
         })
         .collect();
     let look = notes.first().map(|&j| bar.items[j].look.clone()).unwrap_or_default();
+    let obstacles = beam_obstacles(bar, gi, placed);
     let edge = |j: usize| flags(bar.items[j].base).max(1);
     let spec = crate::quanting::QBeam {
         count: n_beams,
@@ -1771,6 +1875,7 @@ fn beam(bar: &mut Bar, gi: usize) {
         origin: 0.0,
         lines: &[-2.0, -1.0, 0.0, 1.0, 2.0],
         staff: Some((0.0, -2.0, 2.0)),
+        obstacles: &obstacles,
     };
     let (yl, yr) = crate::quanting::place(&stems, &spec);
     // Back to the staff's frame, y down, at the outer edge.

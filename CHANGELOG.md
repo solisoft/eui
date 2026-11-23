@@ -256,6 +256,12 @@ release. A wire change lands here first, is released, and then the pin moves.
   clear of it, so a flat or a natural goes under the sharp over it. They
   stood in columns of whole boxes filled from the top, where two flats a
   sixth apart touched.
+- A beam keeps from what stands between its ends (score #1019, LilyPond's
+  beam collisions): another voice's heads, accidentals, stems and flags, a
+  clef, a key or a metre changed in the middle of the bar, another voice's
+  beam. It goes past them, away from its own heads — its stems that much
+  longer — half a space clear where it can; `\override Beam.positions`
+  still says where it is. A beam with nothing under it is where it was.
 - The demo at eui-data.solisoft.net runs on the server's own `soli`
   (`soli serve` in its `app.infos`), as the other sites do, instead of a
   version pinned in its workflow and installed beside it: it sat on 2.27.2
