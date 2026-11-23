@@ -300,9 +300,14 @@ fn play(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, sounding: &mut Vec<(i64, Sounding
     // A trill, a mordent, a turn, a rolled chord: played as written out
     // (score #978). Not on a drum staff, nor with grace notes after it.
     let ornament = ORNAMENTS.into_iter().find(|n| has(n));
-    // `\arpeggioBracket`'s chord is played together: its sign says so.
-    let rolled = ev.arpeggio && ev.arp_style != crate::parse::ArpStyle::Bracket;
-    if (ornament.is_some() || rolled) && ev.drums.is_empty() && ev.after_graces.is_empty() && !heads.is_empty() {
+    // `\arpeggioBracket`'s chord is played together: its sign says so;
+    // `\arpeggioArrowDown`'s rolled from the top.
+    let rolled = match (ev.arpeggio, ev.arp_style) {
+        (false, _) | (true, crate::parse::ArpStyle::Bracket) => Roll::None,
+        (true, crate::parse::ArpStyle::ArrowDown) => Roll::Down,
+        _ => Roll::Up,
+    };
+    if (ornament.is_some() || rolled != Roll::None) && ev.drums.is_empty() && ev.after_graces.is_empty() && !heads.is_empty() {
         ornamented(ev_out, &heads, ornament, rolled, t0, length, vel, channel, fifths);
         return;
     }
@@ -326,6 +331,14 @@ fn play(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, sounding: &mut Vec<(i64, Sounding
     }
 }
 
+/// How a chord is rolled: not, from its lowest note, or from its highest.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Roll {
+    None,
+    Up,
+    Down,
+}
+
 /// The ornaments played (score #978), as LilyPond's articulate.ly plays them.
 const ORNAMENTS: [&str; 6] = ["trill", "prall", "mordent", "turn", "reverseturn", "prallprall"];
 
@@ -340,13 +353,15 @@ const ORNAMENTS: [&str; 6] = ["trill", "prall", "mordent", "turn", "reverseturn"
 /// a reverse turn the one below, the note, the one above, the note; a double
 /// prall the note and the one above twice, then the note.
 #[allow(clippy::too_many_arguments)]
-fn ornamented(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, heads: &[(i64, i64)], ornament: Option<&str>, rolled: bool, t0: i64, length: i64, vel: u8, channel: i64, fifths: i64) {
+fn ornamented(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, heads: &[(i64, i64)], ornament: Option<&str>, rolled: Roll, t0: i64, length: i64, vel: u8, channel: i64, fifths: i64) {
     let mut keys: Vec<(i64, i64, i64)> = heads.iter().map(|&(d, alter)| (key_of(d, alter), d, alter)).collect();
     keys.sort_unstable();
     keys.dedup_by_key(|k| k.0);
     let end = t0 + length.max(1);
     let n = keys.len() as i64;
-    let roll = if rolled && n > 1 { (WHOLE / 64).min(length / 2 / (n - 1)).max(0) } else { 0 };
+    let roll = if rolled != Roll::None && n > 1 { (WHOLE / 64).min(length / 2 / (n - 1)).max(0) } else { 0 };
+    // `\arpeggioArrowDown`: in from the highest (score #1026).
+    let entry = |i: i64| if rolled == Roll::Down { n - 1 - i } else { i };
     let mut sound = |key: i64, from: i64, to: i64| {
         if to > from {
             ev_out.push((from, 1, vec![(144 + channel) as u8, key as u8, vel]));
@@ -354,10 +369,10 @@ fn ornamented(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, heads: &[(i64, i64)], ornam
         }
     };
     for (i, &(key, _, _)) in keys.iter().enumerate().take(keys.len().saturating_sub(1)) {
-        sound(key, t0 + i as i64 * roll, end);
+        sound(key, t0 + entry(i as i64) * roll, end);
     }
     let Some(&(top, d, _)) = keys.last() else { return };
-    let start = t0 + (n - 1) * roll;
+    let start = t0 + entry(n - 1) * roll;
     let room = end - start;
     let unit = (WHOLE / 32).min(room / 4).max(1);
     let above = key_of(d + 1, in_key(d + 1, fifths));

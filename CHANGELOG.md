@@ -185,6 +185,10 @@ release. A wire change lands here first, is released, and then the pin moves.
   sung on one note, joined by a small tie under them with half a word
   space either side, as LilyPond's `tied-lyric` sets them. The tilde was
   printed as it is written.
+- `\arpeggioArrowUp` and `\arpeggioArrowDown` draw the wavy line with
+  Emmentaler's arrow head at its top or its foot (score #1026); the chord
+  under a down arrow is rolled from its highest note. They were passed
+  over with a warning.
 - A score reads the other ornaments and fermatas, which were refused
   (score #1026): `\reverseturn`, `\prallprall`, `\prallmordent`,
   `\upprall`, `\lineprall`, `\veryshortfermata`, `\shortfermata`,

@@ -1681,6 +1681,7 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
         let x = ev.x + ax;
         match ev.arp_style {
             ArpStyle::Wave => draw_arpeggio(pen, x, top + y_of(hi) - 0.6, top + y_of(lo) + 0.6),
+            ArpStyle::ArrowUp | ArpStyle::ArrowDown => draw_arp_arrow(pen, x, top + y_of(hi) - 0.6, top + y_of(lo) + 0.6, ev.arp_style == ArpStyle::ArrowUp),
             ArpStyle::Bracket => draw_arp_bracket(pen, x, top + y_of(hi) - ARP_BRACKET_PAST, top + y_of(lo) + ARP_BRACKET_PAST),
             ArpStyle::Paren => draw_arp_paren(pen, x, top + y_of(hi) - 0.5, top + y_of(lo) + 0.5),
         }
@@ -1963,7 +1964,7 @@ fn chord_extent(ev: &Ev) -> f64 {
 /// How wide a chord's arpeggio is drawn, as its style says (score #1026).
 pub(crate) fn arpeggio_width(ev: &Ev) -> f64 {
     match ev.arp_style {
-        ArpStyle::Wave => glyph("wiggleArpeggiatoUp").advance,
+        ArpStyle::Wave | ArpStyle::ArrowUp | ArpStyle::ArrowDown => glyph("wiggleArpeggiatoUp").advance,
         ArpStyle::Bracket => ARP_BRACKET_PROTRUSION + RULE.staff,
         ArpStyle::Paren => crate::marks::curve_height(chord_extent(ev), ARP_PAREN_LIMIT, ARP_PAREN_RATIO) + RULE.curve_mid / 2.0,
     }
@@ -1997,6 +1998,41 @@ fn draw_arp_paren(pen: &mut Pen, x: f64, y0: f64, y1: f64) {
         ci += 1 + args;
     }
     pen.fill(&stood, 0.0, 0.0);
+}
+
+/// An arpeggio's wavy line with an arrow head (score #1026), as LilyPond's
+/// `Arpeggio::print` with `arpeggio-direction`: the head takes its height
+/// from the line's end it points to, and stands where the next segment of
+/// the wiggle would — Emmentaler draws them to join.
+fn draw_arp_arrow(pen: &mut Pen, x: f64, y0: f64, y1: f64, up: bool) {
+    let g = glyph("wiggleArpeggiatoUp");
+    let step = g.advance;
+    let name = if up { "wiggleArpeggiatoUpArrow" } else { "wiggleArpeggiatoDownArrow" };
+    let arrow = glyph(name);
+    let head = arrow.bbox[3] - arrow.bbox[1];
+    if up {
+        let top = y0 + head;
+        let mut y = y1 - g.bbox[3];
+        loop {
+            pen.glyph("wiggleArpeggiatoUp", x, y);
+            if y + g.bbox[1] <= top {
+                break;
+            }
+            y -= step;
+        }
+        pen.glyph(name, x, y - step);
+    } else {
+        // The head's point at the foot, the wiggle from a step over it.
+        pen.glyph(name, x, y1);
+        let mut y = y1 - step;
+        loop {
+            pen.glyph("wiggleArpeggiatoUp", x, y);
+            if y + g.bbox[1] <= y0 {
+                break;
+            }
+            y -= step;
+        }
+    }
 }
 
 /// How far a whole note's tremolo strokes start from its head's middle.

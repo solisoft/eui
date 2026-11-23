@@ -196,6 +196,81 @@ fn a_bracketed_chord_is_played_together_and_a_parenthesis_rolled() {
     assert_eq!(rolled.iter().map(|n| n.1).collect::<Vec<_>>(), vec![0, q / 16, q / 8]);
 }
 
+/// The places a glyph is drawn among `all`: each outline with its commands,
+/// as (top, bottom) in the page's pixels.
+fn glyph_drawn(all: &[Path], name: &str) -> Vec<(f64, f64)> {
+    let g = &eui_score::glyphs::glyph(name).fill;
+    let codes = |c: &[f64]| -> Vec<f64> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < c.len() {
+            out.push(c[i]);
+            i += 1 + match c[i] as i64 {
+                0 | 1 => 2,
+                2 => 4,
+                3 => 6,
+                _ => 0,
+            };
+        }
+        out
+    };
+    let want = codes(g);
+    all.iter()
+        .filter_map(|p| match p {
+            Path::Fill(c) if c.len() == g.len() && codes(c) == want => {
+                let mut top = f64::MAX;
+                let mut bottom = f64::MIN;
+                let mut i = 0;
+                while i < c.len() {
+                    let n = match c[i] as i64 {
+                        0 | 1 => 2,
+                        2 => 4,
+                        3 => 6,
+                        _ => 0,
+                    };
+                    for k in (0..n).step_by(2) {
+                        top = top.min(c[i + 2 + k]);
+                        bottom = bottom.max(c[i + 2 + k]);
+                    }
+                    i += 1 + n;
+                }
+                Some((top, bottom))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_arpeggio_arrow_heads_its_line_and_a_down_arrow_rolls_from_the_top() {
+    let src = r"{ \arpeggioArrowUp <c' e' g'>4\arpeggio \arpeggioArrowDown <c' e' g'>\arpeggio \arpeggioNormal <c' e' g'>\arpeggio }";
+    let p = parse(src).unwrap();
+    let styles: Vec<ArpStyle> = p.staves[0].events.iter().filter(|e| e.k == Kind::Note).map(|e| e.arp_style).collect();
+    assert_eq!(styles, vec![ArpStyle::ArrowUp, ArpStyle::ArrowDown, ArpStyle::Wave]);
+    assert!(warnings(src).unwrap().is_empty());
+    for (one, name, up) in [(r"{ \arpeggioArrowUp <c' e' g'>4\arpeggio }", "wiggleArpeggiatoUpArrow", true), (r"{ \arpeggioArrowDown <c' e' g'>4\arpeggio }", "wiggleArpeggiatoDownArrow", false)] {
+        let (all, _) = paths(&eng(one), 8.0, 0).unwrap();
+        let arrows = glyph_drawn(&all, name);
+        let wiggles = glyph_drawn(&all, "wiggleArpeggiatoUp");
+        assert_eq!(arrows.len(), 1, "{one}");
+        assert!(wiggles.len() >= 2, "{one}");
+        let (top, bottom) = arrows[0];
+        if up {
+            assert!(wiggles.iter().all(|w| top < w.0), "{one}: the head over the line");
+        } else {
+            assert!(wiggles.iter().all(|w| bottom >= w.1 - 0.01), "{one}: the head under the line");
+        }
+    }
+    assert!(glyph_drawn(&paths(&eng(r"{ <c' e' g'>4\arpeggio }"), 8.0, 0).unwrap().0, "wiggleArpeggiatoUpArrow").is_empty());
+    let q = quarter(r"{ c'4 }");
+    let up = played(r"{ \arpeggioArrowUp <c' e' g'>4\arpeggio }");
+    assert_eq!(up.iter().map(|n| (n.0, n.1)).collect::<Vec<_>>(), vec![(60, 0), (64, q / 16), (67, q / 8)]);
+    let mut down = played(r"{ \arpeggioArrowDown <c' e' g'>4\arpeggio }");
+    down.sort_by_key(|n| n.1);
+    assert_eq!(down.iter().map(|n| (n.0, n.1)).collect::<Vec<_>>(), vec![(67, 0), (64, q / 16), (60, q / 8)], "from the top");
+    assert!(down.iter().all(|n| n.2 == q), "all held to the end");
+}
+
 // ---- Two-note tremolos -------------------------------------------------------
 
 /// The widths of the beams drawn on the first page: the outlines of four

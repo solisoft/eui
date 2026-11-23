@@ -1101,6 +1101,11 @@ pub enum ArpStyle {
     Bracket,
     /// A curve like a slur's, standing up.
     Paren,
+    /// `\arpeggioArrowUp`: the wavy line, an arrow head at its top.
+    ArrowUp,
+    /// `\arpeggioArrowDown`: an arrow head at its foot, the chord rolled
+    /// from its highest note.
+    ArrowDown,
 }
 
 /// One event of a staff, and once it is in a bar, everything placing it
@@ -5064,10 +5069,12 @@ fn layout_command(toks: &[Tok], i: usize, st: &mut St) -> Result<Option<usize>, 
             st.no_autobeam = word == "autoBeamOff";
             done(i + 1)
         }
-        "arpeggioNormal" | "arpeggioBracket" | "arpeggioParenthesis" => {
+        "arpeggioNormal" | "arpeggioBracket" | "arpeggioParenthesis" | "arpeggioArrowUp" | "arpeggioArrowDown" => {
             st.arp_style = match word {
                 "arpeggioBracket" => ArpStyle::Bracket,
                 "arpeggioParenthesis" => ArpStyle::Paren,
+                "arpeggioArrowUp" => ArpStyle::ArrowUp,
+                "arpeggioArrowDown" => ArpStyle::ArrowDown,
                 _ => ArpStyle::Wave,
             };
             done(i + 1)
