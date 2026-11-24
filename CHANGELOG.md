@@ -24,6 +24,27 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- A score opens the four scores the site held and its engraver refused,
+  as they are stored (score #1036, #1037; `tests/lilypond/real/`): a
+  Telemann aria, a set of Scottish tunes, a jig. What they needed: Scheme
+  comments (`;` inside `#( … )`); a variable that holds its staff's
+  `\addlyrics`, or a `\figuremode` block; a thorough bass written in a
+  staff's own music, set over that staff; a context the `\layout`
+  defines (`\name "Ossia"`, `\alias "Staff"`), made by `\context
+  Ossia`; an ossia under its staff (`alignBelowContext`), its staff as
+  long as its music, its words drawn; a multiplied duration (`a4*1/4`,
+  `R1*3/4`); a fermata on a rest; a bar line written inside a bar in one
+  staff, and a `\jump` written in a lower one, taken as the score's; a
+  beam written by hand holding its syllable, as LilyPond's does — lyrics
+  under such beams moved; the long s and an old print's ligatures in
+  lyrics written out in plain letters; `ò`, `á`, `í` and their kin, which
+  the words' face lacked and left a gap for; headers odd or even by the
+  page's number; `\fontsize # 4`, `#.2`, `\combine` and `\number` in
+  markup; a lone staff's `instrumentName`, which was not drawn; the first
+  score's `\header` under the file's titles, its title the piece's;
+  `\section` after a repeat, which had replaced the repeat's sign. A
+  file that defines its music and never prints it shows the last music
+  it defines, with a warning, where it was "there is no music".
 - Words outside the scores are set where they are written (score #1025):
   a top-level `\markup` before the first score, between two scores or
   after the last is a block of the page, spaced by

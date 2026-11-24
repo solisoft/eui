@@ -1083,11 +1083,24 @@ fn draw_ossia(pen: &mut Pen, bars: &[Bar], line: &Line, top: f64, ranges: &mut R
         }
         let kind = bar.drawn();
         let x1 = bar.x1 + barline_width(kind);
+        // Its staff lasts what its music lasts (score #1036): from the bar
+        // line, or from its first note where it starts inside the bar, to
+        // the bar line, or to where the staff goes on alone after its last.
+        let sounding = |ev: &&Ev| !ev.spacer;
+        let first = bar.items.iter().find(sounding);
+        let last = bar.items.iter().rev().find(sounding);
+        let from = first.filter(|ev| ev.start > 0).map_or(bar.x0, |ev| (ev.x - 1.2).max(bar.x0));
+        let after = last.and_then(|l| bar.items.iter().find(|ev| ev.spacer && ev.start >= l.start + l.ticks).map(|next| (l, next)));
+        let to = after.map_or(x1, |(l, next)| (next.x - 0.6).clamp(l.x + crate::marks::item_w(l) + 0.8, x1));
         for i in 0..5 {
-            pen.rect(bar.x0, top + i as f64 - RULE.staff / 2.0, x1 - bar.x0, RULE.staff);
+            pen.rect(from, top + i as f64 - RULE.staff / 2.0, to - from, RULE.staff);
         }
-        draw_bar(pen, "|", bar.x0, top, 0.0);
-        draw_bar(pen, kind, x1, top, 0.0);
+        if from <= bar.x0 {
+            draw_bar(pen, "|", bar.x0, top, 0.0);
+        }
+        if to >= x1 {
+            draw_bar(pen, kind, x1, top, 0.0);
+        }
         for ev in &bar.items {
             let from_k = pen.paths.len();
             if !ev.spacer {
@@ -1107,6 +1120,12 @@ fn draw_ossia(pen: &mut Pen, bars: &[Bar], line: &Line, top: f64, ranges: &mut R
     }
     for c in &line.curves {
         pen.fill(c, 0.0, top);
+    }
+    // Its words: "Orig." over the notes it gives (score #1036).
+    for tx in &line.texts {
+        let from = pen.paths.len();
+        draw_runs(pen, &tx.runs, tx.x0, top + tx.y, tx.em);
+        word_drawn(tx.item, "text", tx.index, from..pen.paths.len());
     }
 }
 

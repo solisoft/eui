@@ -113,8 +113,115 @@ fn read_letters() -> Letters {
         if let Some(sign) = face.get(&'c').filter(|_| !face.contains_key(&'©')).map(copyright_sign) {
             face.insert('©', sign);
         }
+        accented(face);
     }
     letters
+}
+
+/// The accented letters TeX Gyre Schola's outlines here lack (score #1037:
+/// "Thòiseach" lost its ò): each made of a letter's body and the accent of
+/// one the face has — ò of o and à's grave — or, where the face has no such
+/// accent, the bare letter; a long s is an s. A word keeps all its letters.
+fn accented(face: &mut HashMap<char, Letter>) {
+    // (the letter, its body's letter, the letter whose accent it takes)
+    const MADE: [(char, char, char); 26] = [
+        ('ì', 'î', 'à'),
+        ('ò', 'o', 'à'),
+        ('á', 'a', 'é'),
+        ('í', 'î', 'é'),
+        ('ó', 'o', 'é'),
+        ('ú', 'u', 'é'),
+        ('ý', 'y', 'é'),
+        ('Ì', 'I', 'À'),
+        ('Ò', 'O', 'À'),
+        ('Á', 'A', 'É'),
+        ('Í', 'I', 'É'),
+        ('Ó', 'O', 'É'),
+        ('Ú', 'U', 'É'),
+        ('Ý', 'Y', 'É'),
+        ('ñ', 'n', ' '),
+        ('Ñ', 'N', ' '),
+        ('ã', 'a', ' '),
+        ('õ', 'o', ' '),
+        ('å', 'a', ' '),
+        ('Å', 'A', ' '),
+        ('š', 's', ' '),
+        ('č', 'c', ' '),
+        ('ž', 'z', ' '),
+        ('ě', 'e', ' '),
+        ('ř', 'r', ' '),
+        ('ſ', 's', ' '),
+    ];
+    // A letter's outlines above `line` (its accent) and the others (its body).
+    let split = |l: &Letter, line: f64| -> (Vec<f64>, Vec<f64>) {
+        let (mut over, mut body) = (Vec::new(), Vec::new());
+        let mut i = 0;
+        while i < l.f.len() {
+            let mut j = i;
+            let mut low = f64::MIN;
+            loop {
+                let args = crate::text::args_of(l.f.get(j).copied().unwrap_or(4.0));
+                for k in (1..args).step_by(2) {
+                    low = low.max(l.f.get(j + 1 + k).copied().unwrap_or(0.0));
+                }
+                j += 1 + args;
+                if j >= l.f.len() || l.f.get(j).copied().unwrap_or(0.0) == 0.0 {
+                    break;
+                }
+            }
+            if low < line { &mut over } else { &mut body }.extend_from_slice(&l.f[i..j]);
+            i = j;
+        }
+        (over, body)
+    };
+    let top = |face: &HashMap<char, Letter>, ch: char| -> f64 {
+        let Some(l) = face.get(&ch) else { return 0.0 };
+        let mut high: f64 = 0.0;
+        let mut i = 0;
+        while i < l.f.len() {
+            let args = crate::text::args_of(l.f[i]);
+            for k in (1..args).step_by(2) {
+                high = high.min(l.f.get(i + 1 + k).copied().unwrap_or(0.0));
+            }
+            i += 1 + args;
+        }
+        high
+    };
+    for (ch, base, from) in MADE {
+        if face.contains_key(&ch) {
+            continue;
+        }
+        // Over the small letters' height, or the capitals'.
+        let line = if ch.is_uppercase() { top(face, 'X') } else { top(face, 'x') } - 15.0;
+        let Some(body_of) = face.get(&base) else { continue };
+        let (_, mut f) = split(body_of, line);
+        let a = body_of.a;
+        if let (Some(src), Some(plain)) = (face.get(&from).filter(|_| from != ' '), face.get(&from_base(from))) {
+            let (accent, _) = split(src, line);
+            let dx = (a - plain.a) / 2.0;
+            let mut i = 0;
+            while i < accent.len() {
+                let args = crate::text::args_of(accent[i]);
+                f.push(accent[i]);
+                for k in 0..args {
+                    f.push(accent.get(i + 1 + k).copied().unwrap_or(0.0) + if k % 2 == 0 { dx } else { 0.0 });
+                }
+                i += 1 + args;
+            }
+        }
+        face.insert(ch, Letter { a, f });
+    }
+}
+
+/// The plain letter under an accented one the face has: à's a, É's E.
+fn from_base(ch: char) -> char {
+    match ch {
+        'à' => 'a',
+        'é' => 'e',
+        'À' => 'A',
+        'É' => 'E',
+        other => other,
+    }
 }
 
 /// A circle at (`cx`, `cy`) of radius `r`, one way round (`turn` 1) or the

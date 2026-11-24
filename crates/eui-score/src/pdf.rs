@@ -93,7 +93,6 @@ fn page_ink(eng: &Engraved, sp: f64, k: usize, count: usize, title: &str, paper:
         Some(own) => Paper { pt: paper.pt, ..Paper::of(&PaperSpec { staff_size: pages.spec.staff_size, size: pages.spec.size.clone(), ..own.clone() }) },
         None => *paper,
     };
-    let odd = k.is_multiple_of(2);
     let e = em(-2.0);
     let foot_y = paper.h - paper.foot();
     let mut at = page_at(eng, spec, k, count);
@@ -101,6 +100,9 @@ fn page_ink(eng: &Engraved, sp: f64, k: usize, count: usize, title: &str, paper:
         let start = eng.pages.iter().position(|p| p.part == part).unwrap_or(k);
         at.number = first + (k - start) as i64;
     }
+    // Odd or even by the number the page carries, as LilyPond tells them:
+    // after `first-page-number = 2` the first page is an even one.
+    let odd = at.number.rem_euclid(2) == 1;
     let say = |parts: &[PagePart]| words_of(parts, pages.header, title, &at);
     let footer = if odd { spec.odd_footer.as_ref() } else { spec.even_footer.as_ref().or(spec.odd_footer.as_ref()) };
     match footer {

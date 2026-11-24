@@ -1146,6 +1146,29 @@ version 7) and a margin.
   the one it names (`a_group_is_joined_by_the_sign_it_names`);
   `\transposition` and `\midi`'s `\tempo` are played
   (`a_transposition_is_played_and_the_midi_block_gives_the_tempo`).
+- **The scores the site held open as they are stored** (03 §1.4; score
+  #1036, #1037), in `crates/eui-score/tests/real_files.rs`: the Telemann
+  aria twice, the set of Scottish tunes and the jig, unedited, engrave,
+  play and print with the warnings listed (`telemann_opens_as_it_is`,
+  `telemann_as_the_site_stored_it_opens_too`,
+  `set_2_antiquities_opens_as_it_is`,
+  `a_jig_that_never_prints_its_music_shows_the_last_it_defines`,
+  `a_file_with_its_music_printed_is_not_given_another`); a Scheme comment
+  (`a_scheme_comment_is_passed_over`); a variable's `\addlyrics` and a
+  thorough bass in its staff
+  (`a_variable_keeps_the_words_added_to_its_staff`); a fermata on a rest
+  and a multiplied duration
+  (`a_rest_holds_a_fermata_and_a_note_lasts_a_part_of_itself`); bar lines
+  and jumps that are the score's
+  (`a_bar_line_and_a_jump_written_in_one_staff_are_the_scores`); a
+  context of the layout's own, an ossia under its staff
+  (`a_context_the_layout_defines_is_an_ossia_under_its_staff`,
+  `an_ossia_under_its_staff_takes_no_room_where_it_is_silent`); a beam's
+  melisma (`a_beam_written_by_hand_holds_its_syllable`); markup's numbers
+  and `\combine`, a lone staff's name
+  (`markup_takes_a_number_after_a_space_and_one_over_another`); the first
+  score's header (`the_first_scores_header_is_its_own_under_the_files_titles`);
+  the letters (`letters_the_face_lacks_are_made_or_written_out`).
 - **A combined pair says what its context sets** (03 §1.4; score #1021),
   in `crates/eui-score/tests/part_combine.rs`: `aDueText`, `soloText` and
   `soloIIText` from a `\with`, a `\set` and a `\layout`, with no warning

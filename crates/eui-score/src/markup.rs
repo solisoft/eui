@@ -345,6 +345,19 @@ fn item(toks: &[Tok], i: usize, at: usize) -> Result<(Markup, usize), ScoreError
                 }
                 item(toks, j, at)
             }
+            "combine" => {
+                // One markup over another (score #1037): side by side here,
+                // what is not drawn of them left out.
+                let (first, j) = item(toks, i + 1, at)?;
+                let (second, j) = item(toks, j, at)?;
+                Ok((
+                    match (first, second) {
+                        (Markup::Null, m) | (m, Markup::Null) => m,
+                        (a, b) => Markup::Concat(vec![a, b]),
+                    },
+                    j,
+                ))
+            }
             "musicglyph" | "fret-diagram" | "fret-diagram-terse" | "rN" => {
                 // What a note's words draw and a page's do not: read, so a
                 // wrong one is refused as it is there.

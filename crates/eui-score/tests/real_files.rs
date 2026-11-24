@@ -2,7 +2,9 @@
 //! `tests/lilypond/real/*.ly` hold is not edited to suit the engraver — a
 //! file opens, and what it says that is not drawn is passed over with a
 //! warning, never refused. The tests after them pin each construct the two
-//! files needed, on a source of its own.
+//! files needed, on a source of its own. After them, the four scores the
+//! site held that its engraver refused (score #1036, #1037): a Telemann aria
+//! twice, a set of Scottish tunes and a jig that never prints its music.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::arithmetic_side_effects)]
 
@@ -389,4 +391,295 @@ fn a_transposition_is_played_and_the_midi_block_gives_the_tempo() {
     assert_eq!(said("\\score { { c'4 } \\midi { \\tempo 4 = 90 } }"), Vec::<String>::new());
     // The music's own \tempo comes after it, and wins from where it is written.
     assert_eq!(tempo("\\score { { \\tempo 4 = 120 c'4 } \\midi { \\tempo 4 = 90 } }", &MidiOptions::default()), vec![666_666, 500_000]);
+}
+
+// ---- Score #1036, #1037: the four the site held and could not open ---------
+
+const TELEMANN_SAID: [&str; 30] = [
+    "\\paper's two-sided is not read",
+    "\\paper's inner-margin is not read",
+    "the long s and the ligatures of an old print (ſ, ﬅ, ß …) are set in plain letters: the words' face has none",
+    "\\stopStaff is not drawn",
+    "a figure's stroke (6\\\\, 6/) is not drawn: the figure is set plain",
+    "implicitBassFigures in \\with is not read",
+    "\\override StaffSymbol.line-thickness in \\layout is not drawn",
+    "\\override Slur.thickness in \\layout is not drawn",
+    "\\override Tie.minimum-length in \\layout is not drawn",
+    "\\override Stem.thickness in \\layout is not drawn",
+    "\\override Hairpin.thickness in \\layout is not drawn",
+    "\\override BarLine.hair-thickness in \\layout is not drawn",
+    "\\override BarNumber.break-align-symbols in \\layout is not drawn",
+    "\\override BarNumber.X-offset in \\layout is not drawn",
+    "\\override BarNumber.Y-offset in \\layout is not drawn",
+    "\\override BarNumber.font-name in \\layout is not drawn",
+    "\\override BarNumber.font-size in \\layout is not drawn",
+    "\\override LyricText.font-name in \\layout is not drawn",
+    "\\override LyricText.font-size in \\layout is not drawn",
+    "\\override InstrumentName.font-name in \\layout is not drawn",
+    "\\override InstrumentName.font-size in \\layout is not drawn",
+    "\\override BarNumber.padding in \\layout is not drawn",
+    "figuredBassPlusStrokedAlist in \\layout is not read",
+    "figuredBassPlusDirection in \\layout is not read",
+    "\\override BassFigure.font-name in \\layout is not drawn",
+    "\\override BassFigure.font-size in \\layout is not drawn",
+    "\\override NoteHead.style in \\layout is not drawn",
+    "\\override Custos.style in \\layout is not drawn",
+    "\\consists in \\layout is not read",
+    "\\accepts in \\layout is not read",
+];
+
+fn telemann(name: &str) {
+    let p = opens(name);
+    assert_eq!(p.header["title"], "telemann");
+    // The flute, the soprano, the continuo with its figures over it and
+    // its ossia under it.
+    let kinds: Vec<StaffKind> = p.staves.iter().map(|s| s.kind).collect();
+    assert_eq!(kinds, vec![StaffKind::Notes, StaffKind::Notes, StaffKind::Figures, StaffKind::Notes, StaffKind::Ossia]);
+    assert!(p.staves[2].props.above && p.staves[4].props.below);
+    assert_eq!(p.staves[3].name.as_deref(), Some("bc"));
+    // Forty-six bars of 4/4 with their pickup, every staff.
+    let whole = |s: usize| p.staves[s].events.iter().filter(|e| matches!(e.k, Kind::Note | Kind::Rest)).map(|e| e.ticks * e.count.max(1)).sum::<i64>();
+    assert!((0..5).all(|s| whole(s) == 46 * eui_score::WHOLE), "{:?}", (0..5).map(whole).collect::<Vec<_>>());
+    // \clef french: a G clef on the first line.
+    let clef = p.staves[0].events.iter().find(|e| e.k == Kind::Clef).unwrap().clef;
+    assert_eq!(Some(clef), eui_score::parse::Clef::named("french"));
+    // The flute starts on g'', the soprano on g', the bass on c.
+    assert_eq!((keys(&p, 0)[0][0], keys(&p, 1)[0][0], keys(&p, 3)[0][0]), (79, 67, 48));
+    // The thorough bass: <6 4>8 <5 3> … twelve figures, the first two stacked.
+    let figures: Vec<Vec<String>> =
+        p.staves[2].events.iter().filter(|e| !e.figures.is_empty()).map(|e| e.figures.iter().map(|l| l.iter().map(|r| r.text.as_str()).collect::<String>()).collect()).collect();
+    assert_eq!(figures.len(), 12);
+    assert_eq!(figures[..4], [vec!["6", "4"], vec!["5", "3"], vec!["7"], vec!["7"]]);
+    // The ossia: a quarter a lasting a sixteenth, "Orig." over it, in bar 11.
+    let ossia: Vec<&eui_score::parse::Ev> = p.staves[4].events.iter().filter(|e| e.k == Kind::Note).collect();
+    assert_eq!(ossia.len(), 1);
+    assert_eq!((ossia[0].base, ossia[0].ticks, ossia[0].texts[0].text.as_str()), (4, eui_score::WHOLE / 16, "Orig."));
+    // The words, the old print's letters written out: "sein Geist steht".
+    let words: Vec<&str> = p.staves[1].lyrics.as_ref().unwrap().iter().map(|s| s.text.as_str()).collect();
+    for word in ["Geist", "steht", "sein", "biss", "sie", "ist"] {
+        assert!(words.contains(&word), "{word} in {words:?}");
+    }
+    // "Da Capo.", written in the bass: the score's, said by its first staff.
+    assert!(p.staves[0].events.iter().any(|e| e.k == Kind::Mark && e.texts.iter().any(|w| w.runs.iter().any(|r| r.text == "Da Capo."))));
+    assert!(!p.staves[3].events.iter().any(|e| e.k == Kind::Mark));
+    // \paper: 18.5 cm lines, pages numbered from 2, a header each side.
+    assert_eq!((p.paper.line_width, p.paper.first_page_number, p.paper.staff_size), (Some(185.0), Some(2), Some(16.0)));
+    assert!(p.paper.odd_header.is_some() && p.paper.even_header.is_some());
+    assert_eq!(said(&real(name)), TELEMANN_SAID);
+    // Engraved: every syllable has its note — a beam written by hand holds
+    // one, as a slur does — so the last word is under the last bar.
+    let eng = engrave(&real(name), 900.0 / 8.0, &Layout::default()).unwrap();
+    let sung: Vec<(usize, String)> =
+        eng.staves[1].iter().enumerate().flat_map(|(b, bar)| bar.items.iter().filter_map(move |e| e.lyric.as_ref().map(|l| (b, l.text.clone())))).filter(|(_, t)| !t.is_empty()).collect();
+    assert_eq!(sung.last().unwrap(), &(eng.staves[1].len() - 1, "neu.".to_string()));
+    assert_eq!(sung.len(), words.iter().filter(|w| !w.is_empty()).count());
+    let (paged, _) = engrave_paper(&real(name)).unwrap();
+    assert_eq!(paged.pages.len(), 3);
+}
+
+#[test]
+fn telemann_opens_as_it_is() {
+    telemann("telemann");
+}
+
+#[test]
+fn telemann_as_the_site_stored_it_opens_too() {
+    telemann("telemann-prod");
+}
+
+#[test]
+fn set_2_antiquities_opens_as_it_is() {
+    let p = opens("set-2-antiquities");
+    // The book's titles; each score's own title is its piece's.
+    assert_eq!((p.header["title"].as_str(), p.header["subtitle"].as_str(), p.header["piece"].as_str()), ("Set 2", "Antiquities of Scottish Music", "I. Johnnie Cope"));
+    assert_eq!(p.staves.len(), 1);
+    let pieces: Vec<String> = p.staves[0].events.iter().filter(|e| e.k == Kind::Movement).map(|e| e.texts[0].text.clone()).collect();
+    assert_eq!(pieces, ["II. Miss Hog, Newliston", "III. Mrs Morthland", "IV. As a Thòiseach"]);
+    // Each tune's number beside its first line: the circle round it is not drawn.
+    let names: Vec<String> = eui_score::look::changes(&p.staves[0].events, eui_score::look::INSTRUMENT_NAME)
+        .into_iter()
+        .filter_map(|c| match c.1 {
+            eui_score::look::Val::Sym(n) => Some(n),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, ["1", "2", "3", "4"]);
+    assert_eq!((p.paper.left, p.paper.right, p.paper.top, p.paper.staff_size), (Some(15.0), Some(15.0), Some(10.0), Some(18.0)));
+    assert_eq!(
+        said(&real("set-2-antiquities")),
+        vec![
+            "\\paper's print-all-headers is not read",
+            "the header field 'page-count' is not one a title page prints",
+            "\\draw-circle is not markup this draws",
+            "\\draw-circle is not markup this draws",
+            "\\draw-circle is not markup this draws",
+            "\\draw-circle is not markup this draws",
+        ]
+    );
+    // On its paper: one page, the first tune's number beside its first line.
+    let (paged, _) = engrave_paper(&real("set-2-antiquities")).unwrap();
+    assert_eq!(paged.pages.len(), 1);
+    assert_eq!(paged.systems[0].names, ["1"]);
+}
+
+#[test]
+fn a_jig_that_never_prints_its_music_shows_the_last_it_defines() {
+    for name in ["untitled-jig", "untitled-jig-versioned"] {
+        let p = opens(name);
+        assert_eq!((p.header["title"].as_str(), p.header["composer"].as_str()), ("Untitled Jig", "from a recording by Seamus Egan"));
+        assert_eq!(p.staves.len(), 1);
+        // \fixed c' { … e8 e e g fis e …: 24 bars of 6/8.
+        assert_eq!(keys(&p, 0)[..6].concat(), vec![64, 64, 64, 67, 66, 64]);
+        let whole: i64 = p.staves[0].events.iter().filter(|e| matches!(e.k, Kind::Note | Kind::Rest)).map(|e| e.ticks).sum();
+        assert_eq!(whole, 24 * eui_score::WHOLE * 6 / 8);
+        assert_eq!(said(&real(name)), vec!["the header field 'encoder' is not one a title page prints", "this file never prints its music: \\PAVA, the last it defines, is shown"]);
+        // The repeat keeps its sign where \section follows it.
+        let eng = engrave(&real(name), 900.0 / 8.0, &Layout::default()).unwrap();
+        assert_eq!((eng.staves[0][7].bar.as_str(), eng.staves[0][15].bar.as_str()), (":|.", "||"));
+    }
+}
+
+#[test]
+fn a_file_with_its_music_printed_is_not_given_another() {
+    // A variable left unused beside a score: the score is the music.
+    let p = read("spare = { g'1 }\n{ c'1 }");
+    assert_eq!(keys(&p, 0), vec![vec![60]]);
+    assert!(p.warnings.is_empty());
+    // Nothing that holds music: still no music.
+    assert_eq!(parse("\\header { title = \"x\" }\nwords = \\lyricmode { la la }").unwrap_err().message, "score: there is no music (at character 0)");
+}
+
+#[test]
+fn a_scheme_comment_is_passed_over() {
+    let src = "\\paper {\n  #(define fonts\n    (set-global-fonts\n      ; #:music \"beethoven\"\n      ;  #:factor (/ staff-height pt 20)\n  ))\n  line-width = 18.5 \\cm\n}\n\\layout { \\context { \\Score \\override VerticalAxisGroup.default-staff-staff-spacing =\n #'((basic-distance . 0)\n (padding . -0 ) ;ajustez pour l'ossia\n ) } }\n{ c'1 }";
+    let p = read(src);
+    assert_eq!(p.paper.line_width, Some(185.0));
+    // Outside Scheme a semicolon is still not notation.
+    assert!(parse("{ c'1 ; }").unwrap_err().message.contains("';' is not part of the notation"));
+}
+
+#[test]
+fn a_variable_keeps_the_words_added_to_its_staff() {
+    let src = "part = \\new Staff { c'4 d' e' f' }\n\\addlyrics { do re mi fa }\nfigs = \\figuremode { <6>1 }\n\\score { << \\part \\new Staff { \\clef bass << { c1 } \\figs >> } >> }";
+    let p = read(src);
+    assert_eq!(p.staves.iter().map(|s| s.kind).collect::<Vec<_>>(), vec![StaffKind::Notes, StaffKind::Figures, StaffKind::Notes]);
+    assert_eq!(p.staves[0].lyrics.as_ref().unwrap().len(), 4);
+    assert!(p.staves[1].props.above);
+    engrave_paper(src).unwrap();
+    // \bassFigureStaffAlignmentDown: under their staff.
+    let p = read("{ \\clef bass << { c1 } \\figuremode { \\bassFigureStaffAlignmentDown <6>1 } >> }");
+    assert_eq!(p.staves.iter().map(|s| s.kind).collect::<Vec<_>>(), vec![StaffKind::Notes, StaffKind::Figures]);
+    assert!(p.staves[1].props.below);
+}
+
+#[test]
+fn a_rest_holds_a_fermata_and_a_note_lasts_a_part_of_itself() {
+    let p = read("{ c'4 r4\\fermata a4*1/4 s8. r4*2 R1*3/4 }");
+    let timed: Vec<&eui_score::parse::Ev> = p.staves[0].events.iter().filter(|e| matches!(e.k, Kind::Note | Kind::Rest)).collect();
+    assert_eq!(timed[1].scripts[0].name, "fermata");
+    let w = eui_score::WHOLE;
+    assert_eq!((timed[2].base, timed[2].ticks, timed[2].scale), (4, w / 16, Some((1, 4))));
+    assert_eq!((timed[4].base, timed[4].ticks), (4, w / 2));
+    assert_eq!(timed[5].ticks, w * 3 / 4);
+    assert_eq!(parse("{ c'4*0 }").unwrap_err().message, "score: a duration is multiplied by a number or a fraction, like 4*2/3 (at character 5)");
+}
+
+#[test]
+fn a_bar_line_and_a_jump_written_in_one_staff_are_the_scores() {
+    // The last bar stops short in the first staff only: every staff's.
+    let src = "<< \\new Staff { \\partial 8 c'8 c'1 c'2.. \\bar \"||\" } \\new Staff { \\partial 8 c8 c1 c2.. \\jump \"Da Capo.\" } >>";
+    let p = read(src);
+    assert!(p.staves[1].events.iter().any(|e| e.k == Kind::Bar && e.v == "||"));
+    assert!(p.staves[0].events.iter().any(|e| e.k == Kind::Mark) && !p.staves[1].events.iter().any(|e| e.k == Kind::Mark));
+    let eng = engrave(src, 900.0 / 8.0, &Layout::default()).unwrap();
+    assert_eq!(eng.staves[0].len(), eng.staves[1].len());
+    // A staff that holds a note across it keeps its bar: said, not hidden.
+    let err = engrave("<< \\new Staff { c'2 \\bar \"||\" c'2 } \\new Staff { c1 } >>", 900.0 / 8.0, &Layout::default()).unwrap_err();
+    assert!(err.message.contains("every staff has the same bars") || err.message.contains("is not as long"), "{}", err.message);
+}
+
+#[test]
+fn a_context_the_layout_defines_is_an_ossia_under_its_staff() {
+    let layout = "\\layout { \\context { \\Score \\accepts \"Ossia\" } \\context { \\Staff \\name \"Ossia\" alignBelowContext = #\"bc\" \\alias \"Staff\" \\omit TimeSignature \\magnifyStaff #2/3 firstClef = ##f } }";
+    let src =
+        format!("\\score {{ << \\new Staff {{ c''1 c''1 }} \\new Staff = \"bc\" {{ \\clef bass c2 << {{ d4 }} \\context Ossia \\with {{ \\clef bass }} {{ e4^\"Orig.\" }} >> f4 c1 }} >> {layout} }}");
+    let p = read(&src);
+    assert_eq!(p.staves.iter().map(|s| s.kind).collect::<Vec<_>>(), vec![StaffKind::Notes, StaffKind::Notes, StaffKind::Ossia]);
+    assert!(p.staves[2].props.below);
+    // The layout's block is the ossia's, not every staff's: only it is smaller.
+    let eng = engrave(&src, 900.0 / 8.0, &Layout::default()).unwrap();
+    let scales: Vec<Option<f64>> = eng.systems[0].lines.iter().map(|l| l.scale).collect();
+    assert!(scales[0].is_none() && scales[1].is_none() && scales[2].is_some_and(|s| (s - 2.0 / 3.0).abs() < 0.01), "{scales:?}");
+    // Under its staff, and the staff after it no further than without it.
+    let offsets = &eng.systems[0].offsets;
+    assert!(offsets[2] > offsets[1] + 4.0, "{offsets:?}");
+    // Over its staff where it says so, as before.
+    let p = read("{ c'1 << { d'1 } \\new Staff \\with { alignAboveContext = \"m\" } { e'1 } >> }");
+    assert_eq!(p.staves.iter().map(|s| s.kind).collect::<Vec<_>>(), vec![StaffKind::Ossia, StaffKind::Notes]);
+    assert!(!p.staves[0].props.below);
+}
+
+#[test]
+fn an_ossia_under_its_staff_takes_no_room_where_it_is_silent() {
+    let with = "<< \\new Staff = \"a\" { c'1 << { d'1 } \\new Staff \\with { alignBelowContext = \"a\" } { e'1 } >> \\break c'1 c'1 } \\new Staff { c1 c1 c1 c1 } >>";
+    let without = "<< \\new Staff = \"a\" { c'1 d'1 \\break c'1 c'1 } \\new Staff { c1 c1 c1 c1 } >>";
+    let (a, b) = (engrave(with, 900.0 / 8.0, &Layout::default()).unwrap(), engrave(without, 900.0 / 8.0, &Layout::default()).unwrap());
+    assert_eq!(a.systems.len(), 2);
+    // The second system: the lower staff where it is without the ossia.
+    assert!((a.systems[1].offsets[2] - b.systems[1].offsets[1]).abs() < 1e-6, "{:?} {:?}", a.systems[1].offsets, b.systems[1].offsets);
+    // The first: the ossia between the two.
+    assert!(a.systems[0].offsets[1] > 4.0 && a.systems[0].offsets[2] > a.systems[0].offsets[1] + 2.0);
+}
+
+#[test]
+fn a_beam_written_by_hand_holds_its_syllable() {
+    let src = "{ \\autoBeamOff c'8[ d'] e'8 f'8[ g' a'] b'4 } \\addlyrics { one two three four }";
+    let eng = engrave(src, 900.0 / 8.0, &Layout::default()).unwrap();
+    let sung: Vec<(i64, String)> = eng.staves[0].iter().flat_map(|b| b.items.iter()).filter_map(|e| e.lyric.as_ref().map(|l| (e.start, l.text.clone()))).collect();
+    let e = eui_score::WHOLE / 8;
+    assert_eq!(sung, [(0, "one".to_string()), (2 * e, "two".to_string()), (3 * e, "three".to_string()), (6 * e, "four".to_string())]);
+}
+
+#[test]
+fn markup_takes_a_number_after_a_space_and_one_over_another() {
+    // `\fontsize # 4`, `#.2`, `\combine a b`, `\number`.
+    let src = "\\header { title = \\markup { \\override #'(font-name . \"Copperplate\") \\fontsize # 4 \\bold \"Set 2\" } }\n\\new Staff { \\set Staff.instrumentName = \\markup { \\combine \\draw-circle #2.2 #.2 ##f \\vcenter \\halign #CENTER \\huge \\number \"1\" } c'1 }";
+    let p = read(src);
+    assert_eq!(p.header["title"], "Set 2");
+    assert_eq!(said(src), vec!["\\draw-circle is not markup this draws"]);
+    // A lone staff's name is drawn beside it, its line indented for it.
+    let eng = engrave(src, 900.0 / 8.0, &Layout::default()).unwrap();
+    assert_eq!(eng.systems[0].names, ["1"]);
+    // Outside the music too.
+    read("\\markup { \\combine \\draw-circle #2.2 #.2 ##f \"A\" }\n{ c'1 }");
+}
+
+#[test]
+fn the_first_scores_header_is_its_own_under_the_files_titles() {
+    let src = "\\header { title = \"Set\" subtitle = \"Tunes\" }\n\\score { { c'1 } \\header { title = \"I. One\" subtitle = ##f opus = ##f } }\n\\score { { d'1 } \\header { title = \"II. Two\" } }";
+    let p = read(src);
+    assert_eq!((p.header["title"].as_str(), p.header["subtitle"].as_str(), p.header["piece"].as_str()), ("Set", "Tunes", "I. One"));
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+    // With no title before it, a score's header titles the file, as it did.
+    let p = read("\\score { { c'1 } \\header { title = \"Alone\" } }");
+    assert_eq!(p.header["title"], "Alone");
+    assert!(!p.header.contains_key("piece"));
+}
+
+#[test]
+fn letters_the_face_lacks_are_made_or_written_out() {
+    use eui_score::glyphs::{letters, Weight};
+    let face = letters().face(Weight::Regular);
+    // ò: o's body and à's grave, as wide as o.
+    let (o, grave) = (&face[&'o'], &face[&'ò']);
+    assert_eq!(o.a, grave.a);
+    assert!(grave.f.len() > o.f.len());
+    for ch in "ìòáíóúýÌÒÁÍÓÚÝñſ".chars() {
+        assert!(face.contains_key(&ch), "{ch}");
+    }
+    // A syllable's ligatures, in plain letters.
+    let p = read("{ c'4 d' e' f' } \\addlyrics { Gei -- ﬅe biß \u{FB08}e }");
+    let words: Vec<&str> = p.staves[0].lyrics.as_ref().unwrap().iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(words, ["Gei", "ste", "biss", "sie"]);
+    assert_eq!(p.warnings.len(), 1);
 }

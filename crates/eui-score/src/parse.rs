@@ -317,8 +317,35 @@ pub(crate) fn tokens(src: &str) -> Result<Vec<Tok>, ScoreError> {
     let n = cs.len();
     let mut out = Vec::new();
     let mut i = 0;
+    // How deep in the parentheses of a Scheme expression, `#( … )` or
+    // `#'( … )`: there a `;` starts a comment, as Scheme has it.
+    let mut scheme = 0usize;
     while i < n {
         let ch = cs[i];
+        if scheme > 0 && ch == ';' {
+            while i < n && cs[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if scheme > 0 && (ch == '(' || ch == ')') {
+            scheme = if ch == '(' { scheme + 1 } else { scheme - 1 };
+        } else if scheme == 0 && ch == '#' {
+            let open = if matches!(cs.get(i + 1), Some('\'' | '`')) { i + 2 } else { i + 1 };
+            if cs.get(open) == Some(&'(') {
+                // Counted when the `(` itself is read.
+                out.push(Tok::new(T::Sym('#'), "#", i));
+                i += 1;
+                if open > i {
+                    out.push(Tok::new(T::Sym(cs[i]), cs[i].to_string(), i));
+                    i += 1;
+                }
+                out.push(Tok::new(T::Sym('('), "(", i));
+                i += 1;
+                scheme = 1;
+                continue;
+            }
+        }
         if blank(ch) {
             i += 1;
         } else if ch == '%' {
@@ -767,7 +794,8 @@ fn syllables(items: &[LyricItem], at: usize) -> Result<Vec<Syllable>, ScoreError
             continue;
         }
         let skip = !it.quoted && it.s == "_";
-        out.push(Syllable { text: if skip { String::new() } else { it.s.clone() }, runs: it.runs.clone(), hyphen: false, extend: false });
+        let text = if skip { String::new() } else { plain_letters(&it.s, it.at) };
+        out.push(Syllable { text, runs: it.runs.clone(), hyphen: false, extend: false });
     }
     if join {
         return refuse("~ joins two syllables: e~a", at);
@@ -779,12 +807,47 @@ fn syllables(items: &[LyricItem], at: usize) -> Result<Vec<Syllable>, ScoreError
     Ok(out)
 }
 
+/// A syllable in the letters the words' face has (score #1036): an old
+/// print's long s and its ligatures — `ſ`, `ﬅ`, `ß` where the face has
+/// none, and the `ct`, `ſi` and `ſſ` a Garamond keeps at U+FB07, U+FB08
+/// and U+FB0B — written out in plain letters, and said once.
+fn plain_letters(word: &str, at: usize) -> String {
+    let face = crate::glyphs::letters().face(Weight::Regular);
+    let plain = |ch: char| -> Option<&'static str> {
+        // The long s is an s in the face (`glyphs::accented`): said here.
+        if face.contains_key(&ch) && ch != 'ſ' {
+            return None;
+        }
+        Some(match ch {
+            'ſ' => "s",
+            'ß' | '\u{FB0B}' => "ss",
+            'ﬀ' => "ff",
+            'ﬁ' => "fi",
+            'ﬂ' => "fl",
+            'ﬃ' => "ffi",
+            'ﬄ' => "ffl",
+            'ﬅ' | 'ﬆ' => "st",
+            '\u{FB07}' => "ct",
+            '\u{FB08}' => "si",
+            _ => return None,
+        })
+    };
+    if !word.chars().any(|ch| plain(ch).is_some()) {
+        return word.to_owned();
+    }
+    let said = "the long s and the ligatures of an old print (ſ, ﬅ, ß …) are set in plain letters: the words' face has none";
+    if !WARNINGS.with(|w| w.borrow().iter().any(|w| w.message == said)) {
+        warn(said, at);
+    }
+    word.chars().map(|ch| plain(ch).map_or_else(|| ch.to_string(), str::to_owned)).collect()
+}
+
 /// `\addlyrics { … }` after a staff's music: its words, one syllable a
 /// note; each `\addlyrics` after the first a verse under it.
 fn attach_lyrics(toks: &[Tok], mut i: usize, staves: &mut [Staff]) -> Result<usize, ScoreError> {
     while is_cmd(toks, i, "addlyrics") {
         let at = toks[i].at;
-        let Some(last) = staves.last_mut() else {
+        let Some(last) = staves.iter_mut().rev().find(|s| !s.props.below) else {
             return refuse("\\addlyrics follows a staff's music", at);
         };
         let Some((j, after)) = lyrics_at(toks, i + 1) else {
@@ -1595,6 +1658,13 @@ pub struct Props {
     /// The layout settings its `\with` honours: `\override`, `\set`,
     /// `\RemoveEmptyStaves` …
     pub look: crate::look::Map,
+    /// An ossia under the staff it is written in (`alignBelowContext`), a
+    /// thorough bass's figures under theirs: the staff is the one before,
+    /// where an ossia over its staff comes before it.
+    pub below: bool,
+    /// A thorough bass's figures written in the music of the staff after
+    /// them, over which they stand.
+    pub above: bool,
 }
 
 /// What a staff is.
@@ -1999,6 +2069,44 @@ pub struct SpacingSpanner {
 }
 
 thread_local! {
+    /// The contexts the source's `\layout` defines, `\context { \Staff \name
+    /// "Ossia" … }`: by name, the context each is made from and where its
+    /// block opens.
+    static CONTEXTS: RefCell<HashMap<String, (String, usize)>> = RefCell::new(HashMap::new());
+}
+
+/// The contexts a source's `\layout` blocks define (score #1036): `\context
+/// { \Staff \name "Ossia" \alias "Staff" … }` is a staff by another name,
+/// which `\new Ossia` or `\context Ossia` then makes.
+fn defined_contexts(toks: &[Tok]) {
+    let mut found = HashMap::new();
+    for i in 0..toks.len() {
+        if !(is_cmd(toks, i, "context") && is(toks, i + 1, T::Sym('{'))) {
+            continue;
+        }
+        let Some(base) = toks.get(i + 2).filter(|t| t.t == T::Cmd && t.v.starts_with(|c: char| c.is_ascii_uppercase())) else { continue };
+        let Ok(close) = skip_block(toks, i + 1) else { continue };
+        let named = (i + 3..close).find(|&k| is_cmd(toks, k, "name")).and_then(|k| toks.get(k + 1)).filter(|t| matches!(t.t, T::Str | T::Word));
+        if let Some(name) = named {
+            found.insert(name.v.clone(), (base.v.clone(), i + 1));
+        }
+    }
+    CONTEXTS.with(|c| *c.borrow_mut() = found);
+}
+
+/// The context `kind` names is made from, and where the block that defines
+/// it opens, when the source's `\layout` defines it.
+fn defined_context(kind: &str) -> Option<(String, usize)> {
+    CONTEXTS.with(|c| c.borrow().get(kind).cloned())
+}
+
+/// A context's kind as LilyPond knows it: the one a `\layout`-defined
+/// context is made from, or itself.
+fn context_kind(kind: &str) -> String {
+    defined_context(kind).map_or_else(|| kind.to_owned(), |d| d.0)
+}
+
+thread_local! {
     /// The spacing settings read from the source being parsed.
     static SPACING: RefCell<SpacingSpanner> = const { RefCell::new(SpacingSpanner { increment: None, shortest_space: None, base_shortest: None }) };
 }
@@ -2136,6 +2244,8 @@ struct Pending {
 }
 
 struct Base {
+    /// The first score's `\header` is being read as its own, not the file's.
+    first_local: bool,
     header: HashMap<String, String>,
     paper: PaperSpec,
     counter: usize,
@@ -2208,6 +2318,14 @@ struct St {
     here: i64,
     /// The ossias read in the staff: where each starts, and its music.
     ossias: Vec<(i64, Vec<Ev>)>,
+    /// The ossias go under the staff (`alignBelowContext`), not over it.
+    ossia_below: bool,
+    /// The figures of a thorough bass written in the staff's own music,
+    /// `<< \bass \figuremode { … } >>`: where each run starts, and its
+    /// figures; and whether they go under the staff
+    /// (`\bassFigureStaffAlignmentDown`) rather than over it.
+    figured: Vec<(i64, Vec<Ev>)>,
+    figured_below: bool,
     /// `\new Lyrics` read in the staff's `<< >>` (score #1026): the voice
     /// each is sung to (none, the staff's), and its words.
     lyrics: Vec<(Option<String>, Vec<Syllable>, usize)>,
@@ -2268,10 +2386,17 @@ pub(crate) fn at_of(toks: &[Tok], i: usize) -> usize {
 // place it was written, so an error names the definition and an edit
 // rewrites it.
 
+/// The last variable of a source that holds music: its name, and where it is
+/// written.
+type LastMusic = Option<(String, usize)>;
+
 /// The source's tokens with its definitions taken out and every use of one
 /// written out in its place.
-fn expand(toks: Vec<Tok>) -> Result<Vec<Tok>, ScoreError> {
+fn expand(toks: Vec<Tok>) -> Result<(Vec<Tok>, LastMusic), ScoreError> {
     let mut defs: HashMap<String, Vec<Tok>> = HashMap::new();
+    // The last variable that holds music, and where it is written: what a
+    // file that never prints its music is shown by.
+    let mut music: Option<(String, usize)> = None;
     let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
     let mut text = 0usize;
     let mut depth = 0i64;
@@ -2280,9 +2405,21 @@ fn expand(toks: Vec<Tok>) -> Result<Vec<Tok>, ScoreError> {
         let t = &toks[i];
         if depth == 0 && t.t == T::Word && is(&toks, i + 1, T::Sym('=')) && !definition_blocked(&toks, i) {
             beyond();
-            let end = expr_end(&toks, i + 2)?;
+            let mut end = expr_end(&toks, i + 2)?;
+            // `part = \new Staff { … } \addlyrics { … }`: the words are the
+            // music's, and the variable holds both.
+            while is_cmd(&toks, end, "addlyrics") && end > i + 3 {
+                end = match toks.get(end + 1).map(|t| t.t) {
+                    Some(T::Sym('{')) => balanced(&toks, end + 1, '{', '}')?,
+                    Some(T::Lyrics | T::Cmd) => end + 2,
+                    _ => break,
+                };
+            }
             let mut value = Vec::with_capacity(end - i - 2);
             put(&toks[i + 2..end], &defs, &mut value, &mut text)?;
+            if wraps(&value, 0) && !value.iter().any(|v| v.t == T::Lyrics) {
+                music = Some((t.v.clone(), t.at));
+            }
             defs.insert(t.v.clone(), value);
             i = end;
             continue;
@@ -2295,7 +2432,7 @@ fn expand(toks: Vec<Tok>) -> Result<Vec<Tok>, ScoreError> {
         put(std::slice::from_ref(t), &defs, &mut out, &mut text)?;
         i += 1;
     }
-    Ok(out)
+    Ok((out, music))
 }
 
 /// A word and `=` that do not define anything: `\new Staff = "up"`, and
@@ -2359,7 +2496,7 @@ fn expr_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
                 }
                 expr_end(toks, j)
             }
-            "chordmode" | "drummode" | "notemode" | "lyricmode" | "chords" | "drums" | "lyrics" | "sequential" | "simultaneous" => expr_end(toks, i + 1),
+            "chordmode" | "drummode" | "notemode" | "figuremode" | "figures" | "lyricmode" | "chords" | "drums" | "lyrics" | "sequential" | "simultaneous" => expr_end(toks, i + 1),
             "lyricsto" => expr_end(toks, i + 2),
             "stringTuning" if is(toks, i + 1, T::Sym('<')) => balanced(toks, i + 1, '<', '>'),
             "repeat" => {
@@ -2460,6 +2597,10 @@ pub(crate) fn scheme_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
     }
     if toks.get(j).is_none() {
         return refuse("a # with nothing after it", toks[i].at);
+    }
+    // `#.2`
+    if is(toks, j, T::Sym('.')) && is(toks, j + 1, T::Num) {
+        return Ok(j + 2);
     }
     j += 1;
     // `#0.5`
@@ -2752,18 +2893,47 @@ fn skip_setting(toks: &[Tok], i: usize, what: &str) -> Result<Option<usize>, Sco
 /// Read a source.
 pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     WARNINGS.with(|w| w.borrow_mut().clear());
+    DEPTH.with(|d| d.set(0));
+    let (toks, music) = expand(tokens(src)?)?;
+    match (read(&toks), music) {
+        // A file that defines its music and never prints it (score #1037):
+        // LilyPond draws nothing of it. Its last music is shown, and said.
+        (Err(e), Some((name, at))) if e.message.starts_with("score: there is no music") => {
+            let mut parsed = read_defined(src, &name)?;
+            parsed.warnings.push(Warning { message: format!("this file never prints its music: \\{name}, the last it defines, is shown"), at });
+            parsed.warnings.sort_by_key(|w| w.at);
+            Ok(parsed)
+        }
+        (read, _) => read,
+    }
+}
+
+/// The source read again with `\name` written after it: the music a file
+/// defines and never prints.
+fn read_defined(src: &str, name: &str) -> Result<Parsed, ScoreError> {
+    WARNINGS.with(|w| w.borrow_mut().clear());
+    DEPTH.with(|d| d.set(0));
+    let mut toks = tokens(src)?;
+    let end = src.chars().count();
+    toks.push(Tok::new(T::Cmd, name, end));
+    let (toks, _) = expand(toks)?;
+    read(&toks)
+}
+
+/// A source's tokens, its variables written out, read.
+fn read(toks: &[Tok]) -> Result<Parsed, ScoreError> {
     SPACING.with(|sp| *sp.borrow_mut() = SpacingSpanner::default());
     crate::look::reset();
     crate::written::reset();
-    DEPTH.with(|d| d.set(0));
-    let toks = expand(tokens(src)?)?;
-    scan_beyond(&toks);
+    defined_contexts(toks);
+    scan_beyond(toks);
     let mut st = Base {
         header: HashMap::new(),
         paper: PaperSpec::default(),
         counter: 0,
         notes: 0,
         lang: Lang::default(),
+        first_local: false,
         pending: Vec::new(),
         quotes: std::rc::Rc::default(),
         compress: 0,
@@ -2788,7 +2958,7 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     let mut i = 0;
     loop {
         let before = i;
-        i = preamble(&toks, i, &mut st)?;
+        i = preamble(toks, i, &mut st)?;
         if i != before && !movements.is_empty() {
             beyond();
         }
@@ -2802,7 +2972,7 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
         placed = st.blocks.len();
         let Some(t) = toks.get(i) else { break };
         if t.t == T::Cmd && (t.v == "book" || t.v == "bookpart") {
-            if !is(&toks, i + 1, T::Sym('{')) {
+            if !is(toks, i + 1, T::Sym('{')) {
                 return refuse(format!("\\{} wants a {{ block }}", t.v), t.at);
             }
             beyond();
@@ -2860,16 +3030,26 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
             continue;
         }
         if !movements.is_empty() {
-            if t.t == T::Sym('}') || !(t.t == T::Cmd || t.t == T::Sym('{') || twin(&toks, i, '<')) {
+            if t.t == T::Sym('}') || !(t.t == T::Cmd || t.t == T::Sym('{') || twin(toks, i, '<')) {
                 return refuse(format!("'{}' after the end of the music", t.v), t.at);
             }
             beyond();
             st.local.get_or_insert_with(HashMap::new);
         }
         let at = t.at;
-        let (staves, groups, j) = score(&toks, i, &mut st)?;
+        let (staves, groups, j) = score(toks, i, &mut st)?;
         i = j;
         let header = st.local.take().unwrap_or_default();
+        if std::mem::take(&mut st.first_local) {
+            let get = |name: &str| header.get(name).cloned().unwrap_or_default();
+            let piece = if get("piece").is_empty() { get("title") } else { get("piece") };
+            for (field, value) in [("piece", piece), ("opus", get("opus"))] {
+                if !value.is_empty() && st.header.get(field).is_none_or(|v| v.is_empty()) {
+                    beyond();
+                    st.header.insert(field.to_owned(), value);
+                }
+            }
+        }
         // A page asked for after the words before this score ends them:
         // the break is theirs, not the score before's.
         let mut page = std::mem::take(&mut new_page);
@@ -2973,6 +3153,13 @@ fn score(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<(Vec<Staff>, Vec<G
         if !is(toks, i + 1, T::Sym('{')) {
             return refuse("\\score wants a { block }", toks[i].at);
         }
+        // The first score's own `\header` under titles the file has said
+        // already (score #1037): its title is the piece's, over its first
+        // line, as the scores' after it — not the file's.
+        if st.local.is_none() && st.header.get("title").is_some_and(|t| !t.trim().is_empty()) {
+            st.local = Some(HashMap::new());
+            st.first_local = true;
+        }
         i = preamble(toks, i + 2, st)?;
     }
     let mut staves = Vec::new();
@@ -2993,6 +3180,7 @@ fn score(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<(Vec<Staff>, Vec<G
         i += 1;
     }
     even_out(&mut staves);
+    share_bar_lines(&mut staves);
     for p in std::mem::take(&mut st.pending) {
         let found = staves.iter().position(|s| s.voices.iter().any(|v| v.0 == p.voice));
         let Some(si) = found else {
@@ -3020,6 +3208,124 @@ fn even_out(staves: &mut [Staff]) {
             let at = stf.events.last().map_or(0, |e| e.at);
             // One spacer for all of it, as `s1*16` is: cut at the bar lines when the bars are.
             stf.events.push(Ev { k: Kind::Rest, spacer: true, base: 1, ticks: short, at, i: usize::MAX, ..Ev::default() });
+        }
+    }
+}
+
+/// A bar line one staff writes inside a bar — `r2 r4 r8 \bar "||"` where the
+/// last bar stops short — is every staff's, as LilyPond's bar lines are the
+/// score's: the staves that say nothing there are given it, where one of
+/// their notes ends (score #1036). A staff that holds a note across it
+/// keeps its bar whole, and the engraver says the bars differ.
+fn share_bar_lines(staves: &mut [Staff]) {
+    let whole = |s: &Staff| s.kind != StaffKind::Ossia;
+    // Each staff's bar lines, by the moment they are written at; and the
+    // moments its notes end at outside a second voice, with the place in
+    // its events just after.
+    type Walked = (Vec<(i64, Ev)>, Vec<(i64, usize)>);
+    let walk = |events: &[Ev]| -> Walked {
+        let (mut said, mut ends) = (Vec::new(), Vec::new());
+        let (mut t, mut depth, mut second) = (0, 0usize, false);
+        for (k, ev) in events.iter().enumerate() {
+            match ev.k {
+                Kind::Voices => depth += 1,
+                Kind::VoiceNext => second = true,
+                Kind::VoicesEnd => {
+                    depth = depth.saturating_sub(1);
+                    second = false;
+                    if depth == 0 {
+                        ends.push((t, k + 1));
+                    }
+                }
+                Kind::Note | Kind::Rest if !second => {
+                    t += ev.ticks * ev.count.max(1);
+                    if depth == 0 {
+                        ends.push((t, k + 1));
+                    }
+                }
+                Kind::Bar | Kind::RepeatStart | Kind::RepeatEnd if depth == 0 => said.push((t, ev.clone())),
+                _ => {}
+            }
+        }
+        (said, ends)
+    };
+    // A rehearsal mark or a jump (`\jump "Da Capo."`) written in a staff
+    // under the first is the score's too: the first staff says it, where
+    // one of its notes ends and it says none of its own.
+    if let Some(top) = staves.iter().position(|s| matches!(s.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Rhythmic | StaffKind::Tab | StaffKind::TabStrings(_))) {
+        let mut moved: Vec<(i64, Ev)> = Vec::new();
+        let (_, ends) = walk(&staves[top].events);
+        let mut own: Vec<i64> = Vec::new();
+        let mut t = 0;
+        let mut second = false;
+        for ev in &staves[top].events {
+            match ev.k {
+                Kind::VoiceNext => second = true,
+                Kind::VoicesEnd => second = false,
+                Kind::Note | Kind::Rest if !second => t += ev.ticks * ev.count.max(1),
+                Kind::Mark => own.push(t),
+                _ => {}
+            }
+        }
+        for stf in staves.iter_mut().skip(top + 1).filter(|s| whole(s) && s.kind != StaffKind::Figures) {
+            let (mut t, mut depth, mut second) = (0, 0usize, false);
+            let mut k = 0;
+            while k < stf.events.len() {
+                let ev = &stf.events[k];
+                match ev.k {
+                    Kind::Voices => depth += 1,
+                    Kind::VoiceNext => second = true,
+                    Kind::VoicesEnd => {
+                        depth = depth.saturating_sub(1);
+                        second = false;
+                    }
+                    Kind::Note | Kind::Rest if !second => t += ev.ticks * ev.count.max(1),
+                    Kind::Mark if depth == 0 && !own.contains(&t) && !moved.iter().any(|m| m.0 == t) && (t == 0 || ends.iter().any(|e| e.0 == t)) => {
+                        moved.push((t, stf.events.remove(k)));
+                        continue;
+                    }
+                    _ => {}
+                }
+                k += 1;
+            }
+        }
+        if !moved.is_empty() {
+            beyond();
+        }
+        moved.sort_by_key(|m| std::cmp::Reverse(m.0));
+        for (t, ev) in moved {
+            let at = if t == 0 {
+                staves[top].events.iter().position(|e| matches!(e.k, Kind::Note | Kind::Rest | Kind::Voices)).unwrap_or(0)
+            } else {
+                ends.iter().rev().find(|e| e.0 == t).map_or(0, |e| e.1)
+            };
+            staves[top].events.insert(at, ev);
+        }
+    }
+    let walked: Vec<_> = staves.iter().map(|s| walk(&s.events)).collect();
+    // A plain `\bar` only, and only inside the music: at its start a staff's
+    // own is refused or opens a repeat, which is that staff's to say.
+    let lines: Vec<(usize, i64, Ev)> = walked.iter().enumerate().flat_map(|(si, w)| w.0.iter().filter(|(t, ev)| *t > 0 && ev.k == Kind::Bar).map(move |(t, ev)| (si, *t, ev.clone()))).collect();
+    if lines.is_empty() || staves.iter().filter(|s| whole(s)).count() < 2 {
+        return;
+    }
+    for (si, stf) in staves.iter_mut().enumerate().filter(|(_, s)| whole(s)) {
+        let (said, ends) = &walked[si];
+        let mut adds: Vec<(usize, Ev)> = Vec::new();
+        for (from, t, ev) in &lines {
+            if *from == si || said.iter().any(|(at, _)| at == t) || adds.iter().any(|(_, a)| a.ticks == *t) {
+                continue;
+            }
+            // After the last thing that ends there.
+            if let Some((_, k)) = ends.iter().rev().find(|(at, _)| at == t) {
+                // `ticks` holds the moment while the lines are gathered.
+                adds.push((*k, Ev { ticks: *t, i: usize::MAX, ..ev.clone() }));
+            }
+        }
+        adds.sort_by_key(|(k, _)| std::cmp::Reverse(*k));
+        for (k, mut ev) in adds {
+            ev.ticks = 0;
+            stf.events.insert(k, ev);
         }
     }
 }
@@ -3403,6 +3709,12 @@ fn layout_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, 
         }
         if is_cmd(toks, j, "context") && is(toks, j + 1, T::Sym('{')) {
             let close = skip_block(toks, j + 1)? - 1;
+            if (j + 2..close).any(|k| is_cmd(toks, k, "name")) {
+                // A context of the file's own: read where one is made.
+                beyond();
+                j = close + 1;
+                continue;
+            }
             let mut k = j + 2;
             let mut name = String::new();
             if toks.get(k).is_some_and(|t| t.t == T::Cmd && t.v.starts_with(|c: char| c.is_ascii_uppercase())) {
@@ -3577,7 +3889,8 @@ fn holds_staves(toks: &[Tok], i: usize) -> bool {
             T::Sym('{') => depth += 1,
             T::Sym('}') => depth -= 1,
             T::Cmd if depth == 0 && (toks[j].v == "new" || toks[j].v == "context") => {
-                let kind = toks.get(j + 1).map_or("", |k| k.v.as_str());
+                let kind = context_kind(toks.get(j + 1).map_or("", |k| k.v.as_str()));
+                let kind = kind.as_str();
                 if staff_kind(kind).is_some() || group_kind(kind).is_some() || kind == "Lyrics" {
                     return true;
                 }
@@ -3617,7 +3930,7 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
         return staff(toks, i + 1, st, staves, Props::default(), kind);
     }
     if tk.t == T::Cmd && (tk.v == "new" || tk.v == "context") {
-        let kind = toks.get(i + 1).map(|t| t.v.clone()).unwrap_or_default();
+        let kind = context_kind(&toks.get(i + 1).map(|t| t.v.clone()).unwrap_or_default());
         if voice_kind(&kind) {
             if let Some(j) = voice_of_staves(toks, i) {
                 return group(toks, j, st, staves, groups, depth, GroupKind::None, &Props::default());
@@ -3806,7 +4119,7 @@ fn lyrics_part(toks: &[Tok], i: usize, st: &mut Base, staves: &mut [Staff]) -> R
     match voice {
         Some(v) => st.pending.push(Pending { voice: v, syllables, at }),
         None => {
-            let Some(last) = staves.last_mut() else { return refuse("\\new Lyrics follows the staff it is sung to", at) };
+            let Some(last) = staves.iter_mut().rev().find(|s| !s.props.below) else { return refuse("\\new Lyrics follows the staff it is sung to", at) };
             add_verse(last, syllables, 1, at)?;
         }
     }
@@ -4024,6 +4337,9 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         quotes: std::rc::Rc::clone(&base.quotes),
         here: 0,
         ossias: Vec::new(),
+        ossia_below: false,
+        figured: Vec::new(),
+        figured_below: false,
         lyrics: Vec::new(),
         stem: 0,
         no_autobeam: false,
@@ -4056,9 +4372,48 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
     }
     base.counter = st.items;
     base.notes = st.notes;
+    // An ossia stands over its staff, or under it (`alignBelowContext`,
+    // score #1036); a thorough bass written in the staff, over it, or under
+    // it after `\bassFigureStaffAlignmentDown`.
+    let mut under: Vec<Staff> = Vec::new();
     if !st.ossias.is_empty() {
         let events = ossia_events(&st.events, std::mem::take(&mut st.ossias))?;
-        staves.push(Staff { kind: StaffKind::Ossia, events, props: st.ossia_props.take().unwrap_or_default(), lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: Vec::new(), name: None });
+        let mut props = st.ossia_props.take().unwrap_or_default();
+        props.below = st.ossia_below;
+        let ossia = Staff { kind: StaffKind::Ossia, events, props, lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: Vec::new(), name: None };
+        if st.ossia_below {
+            under.push(ossia);
+        } else {
+            staves.push(ossia);
+        }
+    }
+    if !st.figured.is_empty() {
+        let mut events = Vec::new();
+        let mut t = 0;
+        let mut runs = std::mem::take(&mut st.figured);
+        runs.sort_by_key(|r| r.0);
+        for (start, run) in runs {
+            if start > t {
+                events.push(Ev { k: Kind::Rest, spacer: true, base: 1, ticks: start - t, i: usize::MAX, ..Ev::default() });
+            }
+            t = t.max(start) + elapsed(&run);
+            events.extend(run);
+        }
+        let figures = Staff {
+            kind: StaffKind::Figures,
+            events,
+            props: Props { below: st.figured_below, above: !st.figured_below, ..Props::default() },
+            lyrics: None,
+            verses: Vec::new(),
+            lyrics_voice: 1,
+            voices: Vec::new(),
+            name: None,
+        };
+        if st.figured_below {
+            under.insert(0, figures);
+        } else {
+            staves.push(figures);
+        }
     }
     // Each note knows its key's tonic, for its shape (`look::shape_head`).
     let mut tonic = 0;
@@ -4097,6 +4452,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         }
     }
     staves.push(made);
+    staves.extend(under);
     Ok(i)
 }
 
@@ -4160,6 +4516,15 @@ fn header(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreError
                     None => st.header.insert(name.v.clone(), text),
                 };
                 i = j;
+            }
+            // `subtitle = ##f`: the field is said to hold nothing.
+            None if known && boolean_at(toks, i + 2).is_some_and(|b| !b.0) => {
+                beyond();
+                match st.local.as_mut() {
+                    Some(local) => local.remove(&name.v),
+                    None => st.header.remove(&name.v),
+                };
+                i = value_end(toks, i + 2)?;
             }
             _ => {
                 beyond();
@@ -4315,18 +4680,36 @@ struct Part {
 
 /// `\new Staff \with { alignAboveContext = "main" } { … }` beside a staff's
 /// music in `<< >>`: an ossia, kept to be set over the staff.
-fn ossia(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+fn ossia(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>, defined: Option<usize>) -> Result<usize, ScoreError> {
     let at = toks[i].at;
     let mut j = i + 2;
     if named_context(toks, j) {
         j += 2;
     }
-    let mut above = false;
+    // Over its staff or under it (score #1036), as its `\with` says, or
+    // the `\layout` block that defines its context.
+    let side = |from: usize, end: usize| {
+        toks[from..end].iter().rev().find_map(|t| {
+            (t.t == T::Word).then_some(()).and(match t.v.as_str() {
+                "alignAboveContext" => Some(false),
+                "alignBelowContext" => Some(true),
+                _ => None,
+            })
+        })
+    };
+    let mut below = None;
     let mut props = Props::default();
+    if let Some(open) = defined {
+        let end = skip_block(toks, open)?;
+        below = side(open, end);
+        if below.is_some() || is_cmd(toks, j, "with") {
+            ossia_with(toks, open - 1, &mut props)?;
+        }
+    }
     if is_cmd(toks, j, "with") {
         let end = skip_block(toks, j + 1)?;
-        above = toks[j + 1..end].iter().any(|t| t.t == T::Word && t.v == "alignAboveContext");
-        if above {
+        below = side(j + 1, end).or(below);
+        if below.is_some() {
             // What it says of its size and its metre (score #407): the
             // rest is the ossia's own business — where it goes, its first
             // clef, which an ossia never draws.
@@ -4334,8 +4717,11 @@ fn ossia(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) 
         }
         j = end;
     }
-    if !above {
+    let Some(below) = below else {
         return refuse("a staff inside a staff's music is an ossia: \\new Staff \\with { alignAboveContext = … }", at);
+    };
+    if st.ossias.is_empty() {
+        st.ossia_below = below;
     }
     if !starts_expr(toks, j) {
         return refuse("an ossia wants its music", at);
@@ -4366,6 +4752,16 @@ fn ossia_with(toks: &[Tok], j: usize, props: &mut Props) -> Result<(), ScoreErro
         let t = &toks[i];
         if t.t == T::Word && matches!(t.v.as_str(), "alignAboveContext" | "alignBelowContext" | "firstClef") && is(toks, i + 1, T::Sym('=')) {
             i = value_end(toks, i + 2)?;
+            continue;
+        }
+        // The context it is made from and its names, in the `\layout` that
+        // defines it; a clef in its `\with`, which an ossia never draws.
+        if t.t == T::Cmd && t.v.starts_with(|c: char| c.is_ascii_uppercase()) && i == j + 2 {
+            i += 1;
+            continue;
+        }
+        if t.t == T::Cmd && matches!(t.v.as_str(), "name" | "alias" | "clef") && toks.get(i + 1).is_some_and(|a| matches!(a.t, T::Str | T::Word)) {
+            i += 2;
             continue;
         }
         if (is_cmd(toks, i, "remove") || is_cmd(toks, i, "consists"))
@@ -4741,6 +5137,23 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
         if apart > 0 && !(is(toks, i, T::Sym('{')) || toks[i].t == T::Cmd) {
             return refuse("<< wants { music } \\\\ { music } >>", open_at);
         }
+        if (is_cmd(toks, i, "figuremode") || is_cmd(toks, i, "figures")) && st.mode == Mode::Notes && apart == 0 {
+            // `<< \bass \figuremode { <6 4>8 … } >>` in a staff: the thorough
+            // bass's figures, set over the staff as LilyPond sets them there
+            // (score #1036), no voice of it.
+            beyond();
+            let end = expr_end(toks, i)?;
+            if toks[i..end].iter().any(|t| t.t == T::Cmd && t.v == "bassFigureStaffAlignmentDown") {
+                st.figured_below = true;
+            }
+            let (saved_ref, saved_fixed, saved_part) = (st.reference, st.fixed, st.in_part);
+            st.in_part = true;
+            i = expr(toks, i, st, hd)?;
+            (st.reference, st.fixed, st.in_part) = (saved_ref, saved_fixed, saved_part);
+            let run = std::mem::take(&mut st.events);
+            st.figured.push((st.here, run));
+            continue;
+        }
         if !is(toks, i, T::Sym('{')) || parts.len() != apart {
             beyond();
         }
@@ -4786,6 +5199,9 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
         beyond();
     }
     if singing.len() < 2 {
+        if parts.is_empty() {
+            return Ok(i);
+        }
         // One voice, and perhaps the staff's settings beside it.
         let main_k = singing.first().copied().unwrap_or(0);
         let mut main = std::mem::take(&mut parts[main_k].events);
@@ -5003,7 +5419,8 @@ fn postfix(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
     }
     if nxt.t == T::Cmd {
         if SCRIPTS.contains(&nxt.v.as_str()) {
-            let last = last_note(&mut st.events, &tk)?;
+            // On a rest too: `r4\fermata`.
+            let last = last_item(&mut st.events, &tk)?;
             last.scripts.push(Script { name: nxt.v, dir });
             return Ok(i + 2);
         }
@@ -5217,8 +5634,10 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         }
         "new" | "context" => {
             let kind = arg.as_ref().map_or("", |a| a.v.as_str());
+            let defined = defined_context(kind);
+            let kind = defined.as_ref().map_or(kind, |d| d.0.as_str());
             if kind == "Staff" && st.in_part {
-                return ossia(toks, i, st, hd);
+                return ossia(toks, i, st, hd, defined.map(|d| d.1));
             }
             if kind == "Lyrics" {
                 // `\new Staff << \new Voice = "bass" { … } \new Lyrics
@@ -5540,7 +5959,11 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             return Ok(j + 1);
         }
         "section" => {
-            // LilyPond 2.24's `\section`: a section's double bar line.
+            // LilyPond 2.24's `\section`: a section's double bar line —
+            // after a repeat, the repeat's own sign stands (score #1037).
+            if st.events.last().is_some_and(|ev| ev.k == Kind::RepeatEnd) {
+                return Ok(i + 1);
+            }
             st.events.push(Ev { k: Kind::Bar, v: "||".into(), at: tk.at, ..Ev::default() });
             return Ok(i + 1);
         }
@@ -5624,7 +6047,7 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         return Ok(i + 1);
     }
     if SCRIPTS.contains(&word) {
-        last_note(&mut st.events, &tk)?.scripts.push(Script { name: word.to_owned(), dir: 0 });
+        last_item(&mut st.events, &tk)?.scripts.push(Script { name: word.to_owned(), dir: 0 });
         return Ok(i + 1);
     }
     if word == "break" || word == "pageBreak" {
@@ -6530,6 +6953,22 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         }
     }
     let mut count = 1;
+    // `a4*1/4`, `r2*3`, `s1*3/4`, `R1*3/4*5`: a note written as it is and
+    // lasting that much of it (score #1036) — a fraction on any of them, a
+    // whole number on a note or a plain rest; a whole number on `R` or `s`
+    // is the count below.
+    let mut factor: (i64, i64) = (1, 1);
+    while is(toks, i, T::Sym('*')) && toks.get(i + 1).is_some_and(|n| n.t == T::Num && (n.v.contains('/') || !matches!(rest.as_deref(), Some("R" | "s")))) {
+        beyond();
+        let mut parts = toks[i + 1].v.split('/').map(|p| p.parse::<i64>().unwrap_or(0));
+        let (n, d) = (parts.next().unwrap_or(0), parts.next().unwrap_or(1));
+        if !(1..=1024).contains(&n) || !(1..=1024).contains(&d) || factor.0 > 1024 || factor.1 > 1024 {
+            return refuse("a duration is multiplied by a number or a fraction, like 4*2/3", toks[i].at);
+        }
+        let g = gcd(factor.0 * n, factor.1 * d).max(1);
+        factor = (factor.0 * n / g, factor.1 * d / g);
+        i += 2;
+    }
     if is(toks, i, T::Sym('*')) {
         if rest.as_deref() == Some("s") {
             beyond();
@@ -6559,6 +6998,15 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         }
         add /= 2;
         ticks += add;
+    }
+    // A whole-bar rest or a spacer lasts what its fraction leaves of it:
+    // `R1*3/4`, a bar of 3/4.
+    let scaled_whole = factor != (1, 1) && matches!(rest.as_deref(), Some("R" | "s"));
+    if scaled_whole {
+        if (ticks * factor.0) % factor.1 != 0 {
+            return refuse(format!("a 1/{base} cannot be multiplied by {}/{}", factor.0, factor.1), tk.at);
+        }
+        ticks = ticks * factor.0 / factor.1;
     }
     // A spacer counted, `s1*16`: the time of all of them in one.
     if rest.as_deref() == Some("s") && count > 1 {
@@ -6620,9 +7068,12 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
             st.tuplet_outer = Some(outer);
         }
     }
-    if st.scale != (1, 1) {
-        // `\scaleDurations 2/3`: the note that much shorter, no tuplet drawn.
-        let (n, d) = st.scale;
+    let own = if scaled_whole { (1, 1) } else { factor };
+    if st.scale != (1, 1) || own != (1, 1) {
+        // `\scaleDurations 2/3`, or the note's own `*2/3`: the note that
+        // much shorter, no tuplet drawn.
+        let g = gcd(st.scale.0 * own.0, st.scale.1 * own.1).max(1);
+        let (n, d) = (st.scale.0 * own.0 / g, st.scale.1 * own.1 / g);
         if (ev.ticks * n) % d != 0 {
             return refuse(format!("a 1/{base} cannot be scaled by {n}/{d}"), tk.at);
         }
@@ -6706,7 +7157,13 @@ fn figure_lines(toks: &[Tok], mut i: usize) -> Result<(Vec<Vec<Run>>, usize), Sc
                 T::Sym('+') => accidental = Some('♯'),
                 T::Sym('-') => accidental = Some('♭'),
                 T::Sym('!') => accidental = Some('♮'),
-                T::Sym('\\' | '/' | ']') => {}
+                T::Sym(']') => {}
+                T::Sym('\\' | '/') => {
+                    let said = "a figure's stroke (6\\\\, 6/) is not drawn: the figure is set plain";
+                    if !WARNINGS.with(|w| w.borrow().iter().any(|w| w.message == said)) {
+                        warn(said, m.at);
+                    }
+                }
                 _ => break,
             }
             j += 1;
@@ -6907,7 +7364,13 @@ pub(crate) fn markup_item(toks: &[Tok], i: usize, weight: Weight, runs: &mut Vec
                 Ok(j + 1)
             }
             "line" | "small" | "smaller" | "large" | "larger" | "huge" | "tiny" | "teeny" | "normalsize" | "box" | "circle" | "center-align" | "left-align" | "right-align" | "column"
-            | "center-column" | "fill-line" | "sans" | "serif" | "caps" | "smallCaps" => markup_item(toks, i + 1, weight, runs, at),
+            | "center-column" | "fill-line" | "sans" | "serif" | "caps" | "smallCaps" | "number" | "vcenter" => markup_item(toks, i + 1, weight, runs, at),
+            "combine" => {
+                // `\combine \draw-circle #2.2 #.2 ##f \number "1"`: one
+                // markup over another, each read (score #1037).
+                let j = markup_item(toks, i + 1, weight, runs, at)?;
+                markup_item(toks, j, weight, runs, at)
+            }
             "fontsize" | "abs-fontsize" | "raise" | "lower" | "halign" | "with-color" | "translate" | "magnify" => {
                 // `\fontsize #2`, `\raise #1`: an argument the drawing leaves be.
                 let mut j = i + 1;

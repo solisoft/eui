@@ -209,7 +209,7 @@ fn the_corpus_draws_as_the_soli_engraver_drew_it() {
 /// metre, a tuplet in a tuplet and three voices; and a clef in the middle
 /// of a bar, drawn smaller before its note as LilyPond draws it; a header
 /// field no title prints, passed over with a warning.
-const BEYOND: [&str; 15] = [
+const BEYOND: [&str; 16] = [
     "\\new PianoStaff << \\new Staff { c'1 } \\new Staff { c1 c1 } >>",
     "{ \\clef tenor c'4 }",
     "{ c'1 \\repeat unfold 2 { c'4 } }",
@@ -226,6 +226,7 @@ const BEYOND: [&str; 15] = [
     "{ << { c'4 } \\\\ { d'4 } \\\\ { e'4 } >> }",
     "{ c'2 \\clef bass c2 }",
     "\\header { colour = \"red\" } { c'4 }",
+    "{ c'4 * 2 }",
 ];
 
 /// What both refuse, this one saying more of why.

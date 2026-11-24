@@ -732,6 +732,42 @@ construct as LilyPond 2.25 draws it:
   under words that end a page as `last-bottom-spacing`'s; the rows of a
   block keep their distances.
 
+- *Four scores the site held and could not open* (score #1036, #1037),
+  read as they are stored. A `;` starts a comment inside a Scheme
+  expression, `#( … )` or `#'( … )`, and nowhere else. A variable holds
+  the `\addlyrics` written after its staff, and a `\figuremode` block.
+  A thorough bass written in a staff's own music, `<< \bass \figuremode
+  { <6 4>8 … } >>`, is set over that staff, in the room it keeps from
+  the staff above (under it after `\bassFigureStaffAlignmentDown`); a
+  figure's stroke (`6\\`, `6/`) is passed over with a warning. A context
+  the `\layout` defines — `\context { \Staff \name "Ossia" \alias
+  "Staff" … }` — is the context it is made from, by `\new` or
+  `\context`; its block is its own and no other staff's. An ossia goes
+  under its staff with `alignBelowContext`, taking no room in the systems
+  it is silent in, and its staff lasts what its music lasts: it starts at
+  its first note where that is inside a bar and stops after its last, its
+  words drawn. A duration is multiplied: `a4*1/4` is a quarter lasting a
+  sixteenth, `R1*3/4` a bar of 3/4, `r2*3`. A rest holds a fermata or any
+  articulation. A bar line written inside a bar (`r2 r4 r8 \bar "||"`,
+  the last bar stopping short) is every staff's where one of its notes
+  ends, and a rehearsal mark or a `\jump` written in a lower staff is the
+  first staff's to say. A beam written by hand holds its syllable as a
+  slur does (LilyPond's `beamMelismaBusy`). The long s and the ligatures
+  of an old print in the lyrics (`ſ`, `ﬅ`, `ß`, a Garamond's U+FB07,
+  U+FB08, U+FB0B) are written out in plain letters, with one warning; the
+  accented letters the words' face lacks (`ò`, `á`, `í` …) are made of
+  a letter and an accent it has. A page's header is the odd one or the
+  even one by the number the page carries (`first-page-number = 2`
+  starts on an even page). In markup, `\fontsize # 4` and `#.2` are
+  numbers, `\combine` takes its two markups, `\number` and `\vcenter`
+  keep their words. A lone staff's `instrumentName` is drawn beside it.
+  The first score's own `\header`, under titles the file has said
+  already, titles its piece as the later scores' do; a field set to
+  `##f` holds nothing. `\section` after a repeat leaves the repeat its
+  sign. A file that defines its music and never prints it — LilyPond
+  draws nothing — shows the last variable that holds music, with a
+  warning naming it. Not drawn, and said: the custos, baroque note
+  heads, the fonts named, `two-sided` and `inner-margin`.
 - *Real files* (score #359): layout settings — `\override`, `\revert`,
   `\once`, `\tweak`, `\set`, `\unset`, the direction and style switches,
   a context's `\with`, `\layout`, `\midi` and `\paper` settings,

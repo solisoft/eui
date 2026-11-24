@@ -1002,7 +1002,7 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind, tuning: &[i64]) {
 // notes make room for their syllables, as LilyPond's spacing does.
 
 /// The syllables onto the notes. A note tied from the one before, or under
-/// a slur after its first, holds the syllable before — a melisma — and
+/// a slur or a beam written by hand after its first, holds the syllable before — a melisma — and
 /// takes none; rests take none; syllables past the last note are dropped,
 /// as LilyPond drops them.
 fn lyrics_assign(bars: &mut [Bar], sylls: Option<&[Syllable]>, voice: u8) {
@@ -1015,12 +1015,15 @@ fn verse_assign(bars: &mut [Bar], sylls: Option<&[Syllable]>, voice: u8, verse: 
     let mut k = 0;
     let mut tied = false;
     let mut slurred = false;
+    // Under a beam written by hand, `c8[ d]`, as under a slur: LilyPond's
+    // `beamMelismaBusy` (score #1036).
+    let mut beamed = false;
     for bar in bars.iter_mut() {
         for ev in &mut bar.items {
             if marks::voice_of(ev) != voice || ev.k != Kind::Note || ev.percent.is_some() {
                 continue;
             }
-            if tied || slurred {
+            if tied || slurred || beamed {
                 ev.lyric_held = true;
             } else if let Some(s) = sylls.get(k) {
                 if verse == 0 {
@@ -1035,6 +1038,7 @@ fn verse_assign(bars: &mut [Bar], sylls: Option<&[Syllable]>, voice: u8, verse: 
             }
             tied = ev.tie;
             slurred = (slurred || ev.slur_on) && !ev.slur_off;
+            beamed = (beamed || ev.beam_on) && !ev.beam_off;
         }
     }
 }
@@ -2672,7 +2676,18 @@ fn system_reach(sys: &System, staves: &[Vec<Bar>]) -> (f64, f64) {
 pub(crate) fn engrave_parsed(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved, ScoreError> {
     let opts = Opts::of(layout, &parsed.paper);
     crate::breaking::with_durations(&parsed.spacing, || {
-        if parsed.staves.len() > 1 {
+        // A lone staff with a name beside it — `instrumentName`, in its
+        // `\with` or `\set` in its music (score #1037) — is laid out as the
+        // staves of a score are: they are the ones that keep room for names.
+        let named = parsed.staves.first().is_some_and(|s| {
+            let says = |n: &Option<String>| n.as_ref().is_some_and(|n| !n.trim().is_empty());
+            says(&s.props.instrument_name)
+                || says(&s.props.short_instrument_name)
+                || [crate::look::INSTRUMENT_NAME, crate::look::SHORT_INSTRUMENT_NAME]
+                    .iter()
+                    .any(|key| crate::look::changes(&s.events, key).iter().any(|c| matches!(&c.1, crate::look::Val::Sym(n) if !n.trim().is_empty())))
+        });
+        if parsed.staves.len() > 1 || named {
             return engrave_many(parsed, width, layout, &opts);
         }
         engrave_one(parsed, width, layout, &opts)
@@ -3104,9 +3119,13 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
     let mut springs: Vec<Spring> = Vec::with_capacity(reaches.len());
     let mut skies: Vec<Option<std::rc::Rc<Skyline>>> = vec![None; reaches.len()];
     let mut sky = |s: usize| -> std::rc::Rc<Skyline> { skies[s].get_or_insert_with(|| std::rc::Rc::new(skyline_of(all, sys, s))).clone() };
+    // An ossia under its staff (`alignBelowContext`, score #1036): where it
+    // has nothing, the staff after it is set from the staff before it.
+    let under = |s: usize| sys.lines[s].kind == StaffKind::Ossia && staves.get(s).is_some_and(|stf| stf.props.below);
+    let look_of = |p: usize| all[p].get(sys.lines[p].bars.start).and_then(|b| b.items.first()).map(|ev| ev.look.clone()).unwrap_or_default();
     for s in 1..reaches.len() {
-        let p = (0..s).rev().find(|&k| !gone(k));
-        let Some(p) = p.filter(|&p| !gone(s) && !idle(p)) else {
+        let p = (0..s).rev().find(|&k| !gone(k) && !(under(k) && idle(k)));
+        let Some(p) = p.filter(|&p| !gone(s) && !idle(p) && !(under(s) && idle(s))) else {
             springs.push(Spring::rigid(0.0));
             continue;
         };
@@ -3120,22 +3139,37 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
         let smaller = |spec: Spec| Spec { basic: spec.basic - shrink, min: spec.min - shrink, ..spec };
         let spec = if names {
             Spec::new(0.0, 0.0, 0.6, Some(0.0))
-        } else if sys.lines[p].kind == StaffKind::Ossia {
+        } else if under(p) {
+            // From an ossia under its staff to the next: as from that staff.
+            let main = (0..p).rev().find(|&k| !gone(k)).unwrap_or(p);
+            smaller(staff_spacing(&look_of(main), groups, main, s))
+        } else if sys.lines[p].kind == StaffKind::Ossia || under(s) {
             smaller(Spec::new(7.0, 6.0, 1.0, Some(0.0)))
         } else {
-            let start = sys.lines[p].bars.start;
-            let look = all[p].get(start).and_then(|b| b.items.first()).map(|ev| ev.look.clone()).unwrap_or_default();
-            smaller(staff_spacing(&look, groups, p, s))
+            smaller(staff_spacing(&look_of(p), groups, p, s))
         };
         let boxed = reaches[p].1 + spec.padding - reaches[s].0;
         let need = if names { boxed } else { ink_need(&spec, boxed, || sky(p).clear_of(&sky(s))) };
         springs.push(spec.spring(need));
     }
+    // A thorough bass written in its staff stands over it, in the room the
+    // staff keeps from the one above: the two are no closer for it.
+    for s in 1..reaches.len().saturating_sub(1) {
+        let over = sys.lines[s].kind == StaffKind::Figures && staves.get(s).is_some_and(|stf| stf.props.above);
+        let Some(p) = (0..s).rev().find(|&k| !gone(k) && !(under(k) && idle(k))).filter(|&p| over && !gone(s) && !gone(s + 1) && !words(sys.lines[p].kind)) else { continue };
+        let shrink = staff_height(sys.lines[p].kind) * (1.0 - sys.lines[p].scale.unwrap_or(1.0));
+        let spec = staff_spacing(&look_of(p), groups, p, s + 1);
+        let want = (spec.basic - shrink).max(spec.min - shrink);
+        let have = springs[s - 1].natural + springs[s].natural;
+        if have < want {
+            springs[s - 1].natural += want - have;
+        }
+    }
     let mut offsets = vec![0.0];
     for sp in &springs {
         offsets.push(offsets[offsets.len() - 1] + sp.natural);
     }
-    let last = (0..offsets.len()).rev().find(|&s| !gone(s)).unwrap_or(offsets.len() - 1);
+    let last = (0..offsets.len()).rev().find(|&s| !gone(s) && !(under(s) && idle(s))).unwrap_or(offsets.len() - 1);
     let high = (0..reaches.len()).filter(|&s| !idle(s) && !gone(s)).map(|s| offsets[s] + reaches[s].0).fold(f64::INFINITY, f64::min);
     sys.reach = Some((if high.is_finite() { high } else { reaches[0].0 }, offsets[last] + reaches[last].1));
     sys.names = staves.iter().enumerate().map(|(s, stf)| staff_name(stf, sys.lines.get(s).and_then(|l| all.get(s)?.get(l.bars.start)).map_or(0, |b| b.tick0), sys.first_line)).collect();
