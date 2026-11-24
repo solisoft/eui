@@ -21,8 +21,11 @@ pub const DYNAMICS: [&str; 21] = ["pppp", "ppp", "pp", "p", "mp", "mf", "f", "ff
 /// engraver's seven, and the ornaments, the hi-hat's signs, the bowings,
 /// the harmonic's circle and the espressivo protocol 11 adds, and the segno
 /// and coda written over a note (`c4\segno`, `\coda`, `\varcoda`); then
-/// the other ornaments, fermatas and the snap pizzicato (score #1026).
-pub const SCRIPTS: [&str; 32] = [
+/// the other ornaments, fermatas and the snap pizzicato (score #1026); then
+/// the rest of LilyPond's `script.ly` (score #1039): the ornaments with a
+/// hook, Haydn's turn and the turn struck through, the half-open signs, an
+/// organist's heels and toes, the thumb, and the ancient signs.
+pub const SCRIPTS: [&str; 51] = [
     "staccato",
     "tenuto",
     "accent",
@@ -55,6 +58,25 @@ pub const SCRIPTS: [&str; 32] = [
     "henzeshortfermata",
     "henzelongfermata",
     "snappizzicato",
+    "upmordent",
+    "downmordent",
+    "downprall",
+    "prallup",
+    "pralldown",
+    "haydnturn",
+    "slashturn",
+    "halfopen",
+    "halfopenvertical",
+    "lheel",
+    "rheel",
+    "ltoe",
+    "rtoe",
+    "thumb",
+    "signumcongruentiae",
+    "accentus",
+    "circulus",
+    "ictus",
+    "semicirculus",
 ];
 
 /// The most tokens a source may come to once its variables are written out:
@@ -7256,7 +7278,31 @@ pub(crate) fn markup(toks: &[Tok], i: usize, at: usize) -> Result<(Vec<Run>, usi
 fn music_glyph(name: &str) -> Option<&'static str> {
     Some(match name {
         "scripts.segno" => "segno",
-        "scripts.coda" | "scripts.varcoda" => "coda",
+        "scripts.coda" => "coda",
+        "scripts.varcoda" => "scripts.varcoda",
+        // Score #1039: the signs SMuFL has no sure name for, under
+        // Emmentaler's own.
+        "scripts.upmordent" => "scripts.upmordent",
+        "scripts.downmordent" => "scripts.downmordent",
+        "scripts.downprall" => "scripts.downprall",
+        "scripts.prallup" => "scripts.prallup",
+        "scripts.pralldown" => "scripts.pralldown",
+        "scripts.haydnturn" => "scripts.haydnturn",
+        "scripts.slashturn" => "scripts.slashturn",
+        "scripts.halfopen" => "scripts.halfopen",
+        "scripts.halfopenvertical" => "scripts.halfopenvertical",
+        "scripts.upedalheel" => "scripts.upedalheel",
+        "scripts.dpedalheel" => "scripts.dpedalheel",
+        "scripts.upedaltoe" => "scripts.upedaltoe",
+        "scripts.dpedaltoe" => "scripts.dpedaltoe",
+        "scripts.thumb" => "scripts.thumb",
+        "scripts.usignumcongruentiae" => "scripts.usignumcongruentiae",
+        "scripts.dsignumcongruentiae" => "scripts.dsignumcongruentiae",
+        "scripts.uaccentus" | "scripts.daccentus" => "scripts.uaccentus",
+        "scripts.circulus" => "scripts.circulus",
+        "scripts.ictus" => "scripts.ictus",
+        "scripts.usemicirculus" => "scripts.usemicirculus",
+        "scripts.dsemicirculus" => "scripts.dsemicirculus",
         "scripts.ufermata" => "fermataAbove",
         "scripts.dfermata" => "fermataBelow",
         "scripts.trill" => "ornamentTrill",

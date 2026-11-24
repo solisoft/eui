@@ -878,6 +878,16 @@ construct as LilyPond 2.25 draws it:
   elision `e~a` / `e ~ a`, two syllables on one note joined by a tie under
   them; `\new RhythmicStaff`, one line, every note on it, stems up, no
   clef, key or accidental, played as written.
+- *The rest of LilyPond's scripts* (score #1039): the ornaments
+  `\upmordent`, `\downmordent`, `\downprall`, `\prallup`, `\pralldown`,
+  `\haydnturn`, `\slashturn` over the note, played as written out (with
+  `\prallmordent`, `\upprall` and `\lineprall`); `\halfopen`,
+  `\halfopenvertical` and `\thumb` over it; an organist's `\lheel` and
+  `\ltoe` under the staff, `\rheel` and `\rtoe` over it; the ancient
+  `\signumcongruentiae` (its own sign under), `\accentus` and `\circulus`
+  (at the head), `\ictus` (under) and `\semicirculus` (over); `\varcoda`
+  in its own sign. Emmentaler's glyphs, under its own names
+  (`scripts.upmordent`…), which `\musicglyph` knows.
 
 Every construct outside this is still refused with its position. A server
 knows which source needs which client: `eui_score::protocol(src)` answers 9

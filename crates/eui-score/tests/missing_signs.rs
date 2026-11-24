@@ -129,6 +129,82 @@ fn the_other_ornaments_and_fermatas_are_drawn_in_their_own_signs() {
     }
 }
 
+/// Score #1039: the rest of LilyPond's script.ly, which was refused.
+#[test]
+fn the_rest_of_lilyponds_scripts_are_read_and_drawn_where_it_sets_them() {
+    // (command, its sign written with no side, over the staff?, its sign under)
+    for (cmd, sign, over, under) in [
+        ("upmordent", "scripts.upmordent", true, "scripts.upmordent"),
+        ("downmordent", "scripts.downmordent", true, "scripts.downmordent"),
+        ("downprall", "scripts.downprall", true, "scripts.downprall"),
+        ("prallup", "scripts.prallup", true, "scripts.prallup"),
+        ("pralldown", "scripts.pralldown", true, "scripts.pralldown"),
+        ("haydnturn", "scripts.haydnturn", true, "scripts.haydnturn"),
+        ("slashturn", "scripts.slashturn", true, "scripts.slashturn"),
+        ("halfopen", "scripts.halfopen", true, "scripts.halfopen"),
+        ("halfopenvertical", "scripts.halfopenvertical", true, "scripts.halfopenvertical"),
+        ("thumb", "scripts.thumb", true, "scripts.thumb"),
+        ("rheel", "scripts.dpedalheel", true, "scripts.dpedalheel"),
+        ("rtoe", "scripts.dpedaltoe", true, "scripts.dpedaltoe"),
+        ("lheel", "scripts.upedalheel", false, "scripts.upedalheel"),
+        ("ltoe", "scripts.upedaltoe", false, "scripts.upedaltoe"),
+        ("signumcongruentiae", "scripts.usignumcongruentiae", true, "scripts.dsignumcongruentiae"),
+        ("semicirculus", "scripts.dsemicirculus", true, "scripts.dsemicirculus"),
+        ("ictus", "scripts.ictus", false, "scripts.ictus"),
+        ("varcoda", "scripts.varcoda", true, "scripts.varcoda"),
+    ] {
+        let src = format!(r"{{ c''4\{cmd} c''4_\{cmd} c''4^\{cmd} }}");
+        let e = eng(&src);
+        let glyphs: Vec<(&str, f64)> = e.systems[0].lines[0].scripts.iter().map(|sc| (sc.glyph, sc.y)).collect();
+        assert_eq!(glyphs.len(), 3, "{src}: {glyphs:?}");
+        assert_eq!(glyphs[0].0, sign, "{src}");
+        assert_eq!(glyphs[0].1 < 2.0, over, "{src}: {glyphs:?}");
+        assert_eq!(glyphs[1].0, under, "{src}");
+        assert!(glyphs[1].1 > 2.0, "{src}: under when written _");
+        assert!(glyphs[2].1 < 2.0, "{src}: over when written ^");
+        assert!(eui_score::glyphs::glyph(sign).advance > 0.0, "{sign}: Emmentaler's, in the table");
+        assert!(eui_score::glyphs::glyph(under).advance > 0.0, "{under}");
+        paths(&e, 8.0, 0).unwrap();
+        assert!(warnings(&src).unwrap().is_empty(), "{src}");
+    }
+    // The accentus and the circulus go to the head's side: under a note
+    // whose stem is up, over one whose stem is down.
+    for cmd in ["accentus", "circulus"] {
+        let src = format!(r"{{ e'4\{cmd} e''4\{cmd} }}");
+        let e = eng(&src);
+        let ys: Vec<f64> = e.systems[0].lines[0].scripts.iter().map(|sc| sc.y).collect();
+        assert_eq!(ys.len(), 2, "{src}");
+        assert!(ys[0] > 2.0 && ys[1] < 2.0, "{src}: {ys:?}");
+    }
+    // \musicglyph knows them by LilyPond's names.
+    eng(r#"{ c''4^\markup { \musicglyph "scripts.haydnturn" \musicglyph "scripts.thumb" \musicglyph "scripts.varcoda" } }"#);
+}
+
+#[test]
+fn the_ornaments_with_a_hook_are_played() {
+    let keys = |cmd: &str| played(&format!(r"{{ c''2\{cmd} }}")).iter().map(|n| n.0).collect::<Vec<u8>>();
+    assert_eq!(keys("prallmordent"), vec![72, 74, 72, 71, 72]);
+    assert_eq!(keys("upprall"), vec![71, 72, 74, 72, 74, 72], "from below");
+    assert_eq!(keys("downprall"), vec![74, 72, 74, 72, 74, 72], "from above");
+    assert_eq!(keys("lineprall"), vec![74, 72, 74, 72]);
+    assert_eq!(keys("prallup"), vec![72, 74, 72, 74, 72, 71, 72], "left through the note below");
+    assert_eq!(keys("pralldown"), vec![72, 74, 72, 74, 72]);
+    assert_eq!(keys("upmordent"), vec![71, 72, 71, 72]);
+    assert_eq!(keys("downmordent"), vec![74, 72, 71, 72]);
+    assert_eq!(keys("haydnturn"), vec![74, 72, 71, 72], "as the turn");
+    assert_eq!(keys("slashturn"), vec![71, 72, 74, 72], "as the turn the other way round");
+    // The signs that say how to play, not what: the note alone.
+    for cmd in ["halfopen", "thumb", "lheel", "rtoe", "ictus", "signumcongruentiae"] {
+        assert_eq!(keys(cmd), vec![72], "{cmd}");
+    }
+    // A long ornament on a short note fits in it, the note itself last.
+    let q = quarter(r"{ c'4 }");
+    let short = played(r"{ c''16\prallup d''8. }");
+    assert_eq!(short.iter().map(|n| n.0).collect::<Vec<_>>(), vec![72, 74, 72, 74, 72, 71, 72, 74]);
+    assert!(short[..7].iter().all(|n| n.2 <= q / 4 && n.2 > n.1), "{short:?}");
+    assert_eq!(short[7].1, q / 4);
+}
+
 #[test]
 fn wide_ornaments_on_neighbouring_notes_keep_apart() {
     for (src, n) in [

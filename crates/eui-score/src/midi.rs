@@ -403,7 +403,24 @@ enum Roll {
 }
 
 /// The ornaments played (score #978), as LilyPond's articulate.ly plays them.
-const ORNAMENTS: [&str; 6] = ["trill", "prall", "mordent", "turn", "reverseturn", "prallprall"];
+const ORNAMENTS: [&str; 16] = [
+    "trill",
+    "prall",
+    "mordent",
+    "turn",
+    "reverseturn",
+    "prallprall",
+    "prallmordent",
+    "upprall",
+    "lineprall",
+    "upmordent",
+    "downmordent",
+    "downprall",
+    "prallup",
+    "pralldown",
+    "haydnturn",
+    "slashturn",
+];
 
 /// A note's ornament, `ornament`, and its chord rolled when `rolled`, from
 /// `t0` for `length` (score #978). A rolled chord's notes come in from the
@@ -414,7 +431,8 @@ const ORNAMENTS: [&str; 6] = ["trill", "prall", "mordent", "turn", "reverseturn"
 /// prall is the note, the one above, the note; a mordent the note, the one
 /// below, the note; a turn the one above, the note, the one below, the note;
 /// a reverse turn the one below, the note, the one above, the note; a double
-/// prall the note and the one above twice, then the note.
+/// prall the note and the one above twice, then the note; the ornaments
+/// with a hook (score #1039) as written out where `turn` is set.
 #[allow(clippy::too_many_arguments)]
 fn ornamented(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, heads: &[(i64, i64)], ornament: Option<&str>, rolled: Roll, t0: i64, length: i64, vel: u8, channel: i64, fifths: i64) {
     let mut keys: Vec<(i64, i64, i64)> = heads.iter().map(|&(d, alter)| (key_of(d, alter), d, alter)).collect();
@@ -447,8 +465,28 @@ fn ornamented(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, heads: &[(i64, i64)], ornam
         // Score #1026: the turn the other way round, and the prall twice.
         Some("reverseturn") => &[below, top, above],
         Some("prallprall") => &[top, above, top, above],
+        // Score #1039: the ornaments with a hook before or after them, as
+        // their signs draw them — a prall then a mordent; a prall come to
+        // from below, from above, or leaned on from above; a prall left
+        // upward (through the note below) or downward (as the double
+        // prall, it ends on the note); a mordent come to
+        // from below or from above; Haydn's turn as the turn, the turn
+        // struck through as the turn the other way round.
+        Some("prallmordent") => &[top, above, top, below],
+        Some("upprall") => &[below, top, above, top, above],
+        Some("downprall") => &[above, top, above, top, above],
+        Some("lineprall") => &[above, top, above],
+        Some("prallup") => &[top, above, top, above, top, below],
+        Some("pralldown") => &[top, above, top, above],
+        Some("upmordent") => &[below, top, below],
+        Some("downmordent") => &[above, top, below],
+        Some("haydnturn") => &[above, top, below],
+        Some("slashturn") => &[below, top, above],
         _ => &[],
     };
+    // A long ornament on a short note: its notes share the note, the last
+    // one — the note itself — as long as each of them.
+    let unit = unit.min(room / (turn.len() as i64 + 1).max(4)).max(1);
     let mut t = start;
     if ornament == Some("trill") {
         let mut upper = false;

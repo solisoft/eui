@@ -505,6 +505,36 @@ pub(crate) fn probe(path: &str, names: &[String]) -> Result<String, String> {
     Ok(s)
 }
 
+/// The scripts SMuFL has no sure sign for (score #1039): the ornaments with
+/// a hook before or after them, Haydn's turn and the turn struck through,
+/// the half-open signs, an organist's heels and toes, the thumb, and the
+/// signs of mensural and Gregorian music. As the shape notes, a face that
+/// names its glyphs writes them under its own names; a SMuFL face has none.
+const SCRIPT_SIGNS: [&str; 22] = [
+    "scripts.upmordent",
+    "scripts.downmordent",
+    "scripts.downprall",
+    "scripts.prallup",
+    "scripts.pralldown",
+    "scripts.haydnturn",
+    "scripts.slashturn",
+    "scripts.halfopen",
+    "scripts.halfopenvertical",
+    "scripts.upedalheel",
+    "scripts.dpedalheel",
+    "scripts.upedaltoe",
+    "scripts.dpedaltoe",
+    "scripts.thumb",
+    "scripts.usignumcongruentiae",
+    "scripts.dsignumcongruentiae",
+    "scripts.uaccentus",
+    "scripts.circulus",
+    "scripts.ictus",
+    "scripts.usemicirculus",
+    "scripts.dsemicirculus",
+    "scripts.varcoda",
+];
+
 /// Write the table for the face at `path`, or say why not.
 /// The braces kept from a brace face: every tenth of LilyPond's 576, from
 /// one about seven spaces tall to one about forty-eight — a piano staff's
@@ -578,6 +608,16 @@ pub(crate) fn run(path: &str, licence: Option<&str>, braces: Option<&str>) -> Re
             let bbox = [f32::from(bbox.x_min) / per_space, -f32::from(bbox.y_max) / per_space, f32::from(bbox.x_max) / per_space, -f32::from(bbox.y_min) / per_space];
             let anchors = format!("\"stemUpSE\": [{}, {}], \"stemDownNW\": [{}, {}]", num(advance), num(-NAMED_STEM_Y), num(0.0), num(NAMED_STEM_Y));
             rows.push(format!("    \"{own}\": {{\"advance\": {}, \"bbox\": [{}], \"anchors\": {{{anchors}}}, \"fill\": [{}]}}", num(advance), list(&bbox), list(&fill.out)));
+        }
+    }
+    if named {
+        for own in SCRIPT_SIGNS {
+            let id = face.glyph_index_by_name(own).ok_or_else(|| format!("{path}: no glyph named {own}"))?;
+            let mut fill = Fill { per_space, shift: 0.0, out: Vec::new() };
+            let bbox = face.outline_glyph(id, &mut fill).ok_or_else(|| format!("{path}: {own} has no outline"))?;
+            let advance = face.glyph_hor_advance(id).map_or(0.0, |a| f32::from(a) / per_space);
+            let bbox = [f32::from(bbox.x_min) / per_space, -f32::from(bbox.y_max) / per_space, f32::from(bbox.x_max) / per_space, -f32::from(bbox.y_min) / per_space];
+            rows.push(format!("    \"{own}\": {{\"advance\": {}, \"bbox\": [{}], \"anchors\": {{}}, \"fill\": [{}]}}", num(advance), list(&bbox), list(&fill.out)));
         }
     }
     // A piano staff's braces, from the face that holds nothing else, keyed

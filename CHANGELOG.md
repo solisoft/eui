@@ -24,6 +24,19 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- A score reads the rest of LilyPond's scripts, which were refused (score
+  #1039): the ornaments `\upmordent`, `\downmordent`, `\downprall`,
+  `\prallup`, `\pralldown`, `\haydnturn` and `\slashturn`; `\halfopen`,
+  `\halfopenvertical` and `\thumb`; an organist's `\lheel`, `\rheel`,
+  `\ltoe` and `\rtoe` (the left foot under the staff, the right over it);
+  the ancient `\signumcongruentiae`, `\accentus`, `\circulus`, `\ictus`
+  and `\semicirculus` — each placed as LilyPond's script-alist sets it, in
+  Emmentaler's own sign: 22 rows appended to the glyph table through
+  `xtask smufl`, under the font's names (`scripts.upmordent`…), SMuFL
+  having no sure sign for them. `\varcoda` is drawn in its own sign; it
+  borrowed `\coda`'s. The ornaments with a hook are played written out,
+  `\prallmordent`, `\upprall` and `\lineprall` with them — they were
+  drawn and not played; a long ornament on a short note shares the note.
 - A score opens the four scores the site held and its engraver refused,
   as they are stored (score #1036, #1037; `tests/lilypond/real/`): a
   Telemann aria, a set of Scottish tunes, a jig. What they needed: Scheme

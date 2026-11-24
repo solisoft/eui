@@ -358,7 +358,35 @@ fn script_rule(name: &str) -> ScriptRule {
         "espressivo" => r("dynamicMessaDiVoce", "dynamicMessaDiVoce", 0.2, 0, 0, false),
         // `\segno`, `\coda`, `\varcoda` over a note, as LilyPond sets them.
         "segno" => r("segno", "segno", 0.4, 0, -1, false),
-        "coda" | "varcoda" => r("coda", "coda", 0.4, 0, -1, false),
+        "coda" => r("coda", "coda", 0.4, 0, -1, false),
+        "varcoda" => r("scripts.varcoda", "scripts.varcoda", 0.4, 0, -1, false),
+        // Score #1039: the rest of LilyPond's script.ly, each as its
+        // script-alist sets it. The ornaments with a hook and the two other
+        // turns over the note, as the turn.
+        "upmordent" => r("scripts.upmordent", "scripts.upmordent", 0.2, 0, -1, false),
+        "downmordent" => r("scripts.downmordent", "scripts.downmordent", 0.2, 0, -1, false),
+        "downprall" => r("scripts.downprall", "scripts.downprall", 0.2, 0, -1, false),
+        "prallup" => r("scripts.prallup", "scripts.prallup", 0.2, 0, -1, false),
+        "pralldown" => r("scripts.pralldown", "scripts.pralldown", 0.2, 0, -1, false),
+        "haydnturn" => r("scripts.haydnturn", "scripts.haydnturn", 0.2, 0, -1, false),
+        "slashturn" => r("scripts.slashturn", "scripts.slashturn", 0.2, 0, -1, false),
+        // A wind's half-open hole and the thumb over the note; an
+        // organist's left foot under the staff, the right over it.
+        "halfopen" => r("scripts.halfopen", "scripts.halfopen", 0.2, 0, -1, false),
+        "halfopenvertical" => r("scripts.halfopenvertical", "scripts.halfopenvertical", 0.2, 0, -1, false),
+        "thumb" => r("scripts.thumb", "scripts.thumb", 0.2, 0, -1, false),
+        "lheel" => r("scripts.upedalheel", "scripts.upedalheel", 0.2, 0, 1, false),
+        "ltoe" => r("scripts.upedaltoe", "scripts.upedaltoe", 0.2, 0, 1, false),
+        "rheel" => r("scripts.dpedalheel", "scripts.dpedalheel", 0.2, 0, -1, false),
+        "rtoe" => r("scripts.dpedaltoe", "scripts.dpedaltoe", 0.2, 0, -1, false),
+        // The ancient signs: the signum congruentiae over the note, its
+        // own sign under; the accentus and the circulus at the head, the
+        // ictus under, the semicirculus over, each in a space.
+        "signumcongruentiae" => r("scripts.usignumcongruentiae", "scripts.dsignumcongruentiae", 0.2, 0, -1, false),
+        "accentus" => r("scripts.uaccentus", "scripts.uaccentus", 0.2, 0, 0, true),
+        "circulus" => r("scripts.circulus", "scripts.circulus", 0.2, 0, 0, true),
+        "ictus" => r("scripts.ictus", "scripts.ictus", 0.2, 0, 1, true),
+        "semicirculus" => r("scripts.dsemicirculus", "scripts.dsemicirculus", 0.2, 0, -1, true),
         // Score #1026: the other ornaments over the note, as the turn;
         // the snap pizzicato over it (LilyPond's `snappizzicato`, padding 0.2).
         "reverseturn" => r("ornamentTurnInverted", "ornamentTurnInverted", 0.2, 0, -1, false),
