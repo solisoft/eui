@@ -734,3 +734,24 @@ fn a_rhythmic_staff_plays_its_notes_as_written() {
     let all = played(r"\new RhythmicStaff { c'4 e' g'2 }");
     assert_eq!(all.iter().map(|n| n.0).collect::<Vec<_>>(), vec![60, 64, 67]);
 }
+
+// ---- A voice that only waits ---------------------------------------------------
+
+/// Score #1039: between `\\\\`, a part of spacers is a voice all the same.
+#[test]
+fn a_voice_that_only_waits_between_double_backslashes_is_a_voice() {
+    // The first voice keeps its number through the bars where the second
+    // says nothing: its stems go up there too, as LilyPond's \\voiceOne has them.
+    let voices = |src: &str| -> Vec<Option<u8>> { parse(src).unwrap().staves[0].events.iter().filter(|e| e.k == Kind::Note).map(|e| e.voice).collect() };
+    assert_eq!(voices(r"{ << { e'4 f' g' a' } \\ { s1 } >> }"), vec![Some(1); 4]);
+    assert_eq!(voices(r"{ << { e'4 f' g' a' | b'1 } \\ { s1 | g'1 } >> }"), vec![Some(1), Some(1), Some(1), Some(1), Some(1), Some(2)]);
+    let ups = |src: &str| -> Vec<bool> { items(&eng(src)).iter().filter(|ev| ev.k == Kind::Note).map(|ev| ev.up).collect() };
+    assert_eq!(ups(r"{ << { c''4 d'' e'' f'' } \\ { s1 } >> }"), vec![true; 4], "stems up, where one voice alone would turn them down");
+    assert_eq!(ups(r"{ c''4 d'' e'' f'' }"), vec![false; 4]);
+    // It is drawn as nothing and played as nothing.
+    assert_eq!(played(r"{ << { c''4 d'' e'' f'' } \\ { s1 } >> }").len(), 4);
+    // Without \\\\, what does not sing is still the staff's settings beside one voice.
+    assert_eq!(voices(r"{ << { \key g \major s1 } { e'4 f' g' a' } >> }"), vec![None; 4]);
+    // Nothing but spacers on both sides draws no voices.
+    assert!(parse(r"{ << { s1 } \\ { s1 } >> c'1 }").unwrap().staves[0].events.iter().all(|e| e.voice.is_none()));
+}

@@ -5210,7 +5210,13 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
     st.look.restore_voice(outer_look);
     st.voice_cmd = outer_cmd;
     st.in_part = outer_part;
-    let singing: Vec<usize> = (0..parts.len()).filter(|&k| sings(&parts[k].events)).collect();
+    // Between `\\`, a part that only waits (`{ s1 }`) is a voice all the
+    // same, as LilyPond has it: the voice beside it keeps its number, its
+    // stems up or down (score #1039). Without `\\`, what does not sing is
+    // the staff's settings beside one voice.
+    let apart_voices = apart > 0 && parts.len() == apart + 1 && parts.iter().any(|p| sings(&p.events));
+    let waits = |events: &[Ev]| events.iter().any(|ev| ev.k == Kind::Rest && ev.spacer);
+    let singing: Vec<usize> = (0..parts.len()).filter(|&k| sings(&parts[k].events) || (apart_voices && waits(&parts[k].events))).collect();
     if parts.len() != 2 || apart != 1 || parts.iter().skip(1).any(|p| p.events.iter().any(|ev| staff_level(&ev.k))) {
         beyond();
     }

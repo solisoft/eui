@@ -566,7 +566,9 @@ construct as LilyPond 2.25 draws it:
 - *Voices*: `<< … >>` of one or two voices written side by side —
   `\new Voice = "name" { \voiceOne … }`, `\voiceTwo` — and of parts with no
   notes, a `\global` of the staff's settings and spacers, set in the first
-  voice where they fall; a staff of its own for a voice with none; under
+  voice where they fall (between `\\`, a part that only waits, `{ s1 }`,
+  is a voice all the same: the one beside it keeps its number and its
+  stems, score #1039); a staff of its own for a voice with none; under
   `\relative` each part from the last pitch of the part before it and what
   follows from the last's, as LilyPond reads them. `\new Lyrics \lyricsto
   "name" { … }`, `\lyricmode`, `\skip` and `\set stanza` in lyrics, and

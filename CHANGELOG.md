@@ -405,6 +405,12 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Changed
 
+- Between `\\`, a part that only waits is a voice all the same (score
+  #1039): in `<< { c''4 d'' e'' f'' } \\ { s1 } >>` the first voice keeps its
+  number and its stems go up, as LilyPond's `\voiceOne` has them. It was
+  read as one voice with free stems, so a bar where the second voice says
+  nothing was drawn unlike the bars around it. Without `\\`, a part of
+  settings and spacers is still the staff's own beside one voice.
 - A chord's accidentals stand as LilyPond places them (score #1019): the
   top one nearest the heads, then the bottom one, then the second from the
   top — the engraving books' zig-zag; notes an octave apart share a column,
