@@ -1310,12 +1310,13 @@ pub(crate) fn digit_height(e: f64) -> f64 {
 fn draw_tuplet(pen: &mut Pen, tp: &TupletPlace, top: f64) {
     let e = em(-2.0);
     let w = text_width(&tp.label, Weight::Italic, e);
-    let h = digit_height(e);
     let xm = (tp.x0 + tp.x1) / 2.0;
     let span = (tp.x1 - tp.x0).max(0.01);
     let slope = (tp.yb - tp.ya) / span;
-    let ym = tp.ya + slope * (xm - tp.x0);
-    pen.text(&tp.label, Weight::Italic, xm - w / 2.0, top + ym + h / 2.0, e);
+    // Where a slur over it takes it to be (`marks::tuplet_number_box`).
+    if let Some(b) = crate::marks::tuplet_number_box(tp) {
+        pen.text(&tp.label, Weight::Italic, b[0], top + b[3], e);
+    }
     if !tp.bracket {
         return;
     }
@@ -2308,7 +2309,7 @@ fn draw_after_graces(pen: &mut Pen, ev: &Ev, shift: f64, top: f64) {
 /// How far `ev`'s after-grace notes move right: up to half a space before
 /// `next` (where the next note's ink starts, or the bar line), never left of
 /// where they were laid out.
-fn after_shift(ev: &Ev, next: f64) -> f64 {
+pub(crate) fn after_shift(ev: &Ev, next: f64) -> f64 {
     let Some(last) = ev.after_graces.last() else { return 0.0 };
     let end = ev.x + last.x + last.head_w.unwrap_or(0.0);
     (next - 0.6 - end).max(0.0)
@@ -2316,7 +2317,7 @@ fn after_shift(ev: &Ev, next: f64) -> f64 {
 
 /// Where the next note's ink starts after `ev` in its bar: the next item
 /// of its voice, else the bar line.
-fn next_left(bar: &Bar, ev: &Ev) -> f64 {
+pub(crate) fn next_left(bar: &Bar, ev: &Ev) -> f64 {
     bar.items.iter().filter(|o| o.start > ev.start && o.voice == ev.voice && !o.spacer).map(|o| o.x - o.left).fold(bar.x1, f64::min)
 }
 
@@ -2390,17 +2391,12 @@ fn draw_grace_group(pen: &mut Pen, ev: &Ev, graces: &[Ev], dx: f64, top: f64) {
             pen.rect(xa, y0, xb - xa, t);
         }
     }
-    if dx == 0.0 && std::ptr::eq(graces, ev.graces.as_slice()) && matches!(first.grace, Some(GraceKind::Acciaccatura | GraceKind::Appoggiatura)) && !ev.heads.is_empty() {
-        // Under the heads when the grace stems are up, over them when down.
-        let below = first.up;
-        let dir = if below { 1.0 } else { -1.0 };
-        let gx = ev.x + first.x + first.head_w.unwrap_or(0.0) / 2.0;
-        let gy = if below { y_of(first.heads.first().map_or(0, |h| h.pos)) + 0.5 } else { y_of(first.heads.last().map_or(0, |h| h.pos)) - 0.5 };
-        let nx = ev.x + ev.head_w.unwrap_or(0.0) / 2.0;
-        let ny = if below { y_of(ev.heads.first().map_or(0, |h| h.pos)) + 0.6 } else { y_of(ev.heads.last().map_or(0, |h| h.pos)) - 0.6 };
-        let hgt = crate::marks::curve_height((nx - gx).max(0.1), 1.0, 0.333);
-        if let Some(cmds) = crate::marks::arc_cmds(gx, gy, nx, ny, dir, hgt) {
-            pen.fill(&cmds, 0.0, top);
+    if dx == 0.0 && std::ptr::eq(graces, ev.graces.as_slice()) {
+        if let Some((xa, ya, xb, yb, dir)) = crate::marks::grace_slur(ev) {
+            let hgt = crate::marks::curve_height((xb - xa).max(0.1), 1.0, 0.333);
+            if let Some(cmds) = crate::marks::arc_cmds(xa, ya, xb, yb, dir, hgt) {
+                pen.fill(&cmds, 0.0, top);
+            }
         }
     }
 }

@@ -233,13 +233,67 @@ pub(crate) struct Widths {
     pub keep: Vec<bool>,
     /// A movement starts with it: a line starts here.
     pub fresh: Vec<bool>,
+    /// The tempo mark over it, if it has one.
+    pub hang: Vec<Option<Hang>>,
+}
+
+/// A tempo mark over a bar, as the line breaker knows it (score #1060): a
+/// mark takes no room in its bar, as LilyPond's takes none
+/// (`MetronomeMark.extra-spacing-width`), so one over the last bar of a line
+/// ran past the staff's end, into the margin and off the page.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Hang {
+    /// How wide the mark is.
+    pub w: f64,
+    /// From the note it starts over to its bar's end, at the bar's natural
+    /// spacing.
+    pub after_w: f64,
+    /// … and how much that stretches: the springs there.
+    pub after_spring: f64,
+    /// Over its bar's first note: opening a line, it starts after the clef,
+    /// this far from where the line starts.
+    pub lead: Option<f64>,
+}
+
+/// What a space of tempo mark past its line's end costs the line: a line
+/// that leaves a mark its room is taken over one a little looser or tighter,
+/// and a mark that would hang by a space moves nothing.
+const HANG: f64 = 6.0;
+
+/// How far the tempo marks of the line `i..jj` reach past its end, in
+/// spaces, the farthest of them: `w` and `spring` the line's natural width
+/// and its springs, `room` what it is set in, `ragged` whether it keeps its
+/// natural width — then the room it leaves is the mark's too.
+#[allow(clippy::too_many_arguments)]
+fn overhang(m: &Widths, i: usize, jj: usize, room: f64, w: f64, spring: f64, courtesy: f64, ragged: bool) -> f64 {
+    if m.hang.get(i..jj).is_none_or(|hs| hs.iter().all(Option::is_none)) {
+        return 0.0;
+    }
+    let ratio = (room - w - courtesy) / spring.max(1.0);
+    let (stretch, spare) = if ragged && ratio > 0.0 { (0.0, room - w - courtesy) } else { (ratio, 0.0) };
+    let mut over: f64 = 0.0;
+    // What follows the bar on the line: the bars after it, what the line
+    // announces at its end, the room a ragged line leaves.
+    let (mut tail_w, mut tail_spring) = (courtesy + spare, 0.0);
+    for b in (i..jj).rev() {
+        if let Some(h) = m.hang.get(b).copied().flatten() {
+            let after = match h.lead.filter(|_| b == i) {
+                Some(lead) => room - lead,
+                None => h.after_w + stretch * h.after_spring + tail_w + stretch * tail_spring,
+            };
+            over = over.max(h.w - after);
+        }
+        tail_w += m.inner_w.get(b).copied().unwrap_or(0.0);
+        tail_spring += m.springs.get(b).copied().unwrap_or(0.0);
+    }
+    over
 }
 
 /// One line's badness, `i..jj`: none where it cannot be one; LilyPond's
 /// demerits, the square of how far its springs stretch or squeeze — a
 /// squeeze four times dearer — and one for the line. A ragged line costs
 /// nothing for its room left; a line too full for its tightest spacing, a
-/// thousand.
+/// thousand; one whose tempo mark runs past its end, [`HANG`] a space.
 struct Line {
     jj: usize,
     cost: f64,
@@ -284,6 +338,8 @@ fn lines_from(m: &Widths, i: usize, room: f64, opts: &Opts) -> Vec<Line> {
         } else {
             ratio * ratio * 10.0 + 1.0
         };
+        // A tempo mark that would run past the line's end: dearer by how far.
+        let cost = cost + HANG * overhang(m, i, jj, room, w, spring, courtesy, opts.ragged(first_of_score, last_of_score));
         out.push(Line { jj, cost });
     }
     out

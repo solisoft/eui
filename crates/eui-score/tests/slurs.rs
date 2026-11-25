@@ -391,3 +391,131 @@ fn marks_say_their_box_and_the_note_they_are_written_on() {
     let broken = set(r"{ c''1\< \break d''1 e''1\! }");
     assert_eq!(hairpins(&broken).iter().map(|h| (h.item, h.piece)).collect::<Vec<_>>(), [(0, 0), (0, 1)]);
 }
+
+/// A grace note's ink on the side of a slur over it: its head, and its stem
+/// with the flag that hangs from its end.
+fn grace_boxes(note: &Ev) -> Vec<[f64; 4]> {
+    let g = &note.graces[0];
+    let (x, w) = (note.x + g.x, g.head_w.unwrap());
+    let y = y_of(g.heads[0].pos);
+    let stem = x + w;
+    vec![[x, y - 0.35, x + w, y + 0.35], [stem - RULE.stem, g.stem_end, stem + 0.5, y]]
+}
+
+/// A slur goes over the grace notes it spans (score #1060), as LilyPond's
+/// goes round every note column under it: a phrase's slur was drawn through
+/// the head and the stem of an acciaccatura before its second note.
+#[test]
+fn a_slur_goes_over_a_grace_note_under_it() {
+    let eng = set(r"{ a'4( \acciaccatura a''8 g''4. f''8 e''8 d''8) }");
+    let slur = curves(&eng, CurveKind::Slur)[0];
+    assert!(slur.up);
+    let ns = notes(&eng);
+    assert_eq!(ns[1].graces.len(), 1);
+    let boxes = grace_boxes(ns[1]);
+    for b in &boxes {
+        assert!(gap(slur, *b) >= 0.3, "the slur is {} from the grace note", gap(slur, *b));
+    }
+    // Over it, not under: over its stem and its flag, all of the curve
+    // above the stem's end.
+    let (left, right) = (boxes[1][0], boxes[1][2]);
+    let low = along(slur).iter().filter(|p| p.0 >= left && p.0 <= right).map(|p| p.1).fold(f64::MIN, f64::max);
+    assert!(low < ns[1].graces[0].stem_end - 0.3, "the slur passes at {low}, the grace note's stem ends at {}", ns[1].graces[0].stem_end);
+    // The grace notes before the slur's first note are not under it: they move nothing.
+    let before = set(r"{ \acciaccatura a''8 a'4( g''4. f''8 e''8 d''8) }");
+    let plain = set(r"{ a'4( g''4. f''8 e''8 d''8) }");
+    let (b, p) = (curves(&before, CurveKind::Slur)[0], curves(&plain, CurveKind::Slur)[0]);
+    assert!((b.points[1].1 - b.points[0].1 - (p.points[1].1 - p.points[0].1)).abs() < 1e-6, "the same arch with a grace note before its start");
+}
+
+/// … under the notes as over them, and `\afterGrace`'s notes as the ones
+/// before a note.
+#[test]
+fn a_slur_goes_under_grace_notes_and_round_the_ones_after_a_note() {
+    // A second voice: its slurs under, its grace notes' stems down.
+    let eng = set(r"{ << { r1 } \\ { e'4( \acciaccatura c'8 d'4. e'8 f'8 g'8) } >> }");
+    let slur = curves(&eng, CurveKind::Slur)[0];
+    assert!(!slur.up);
+    let ns = notes(&eng);
+    let note = ns.iter().find(|ev| !ev.graces.is_empty()).unwrap();
+    let g = &note.graces[0];
+    assert!(!g.up, "a second voice's grace notes, stems down");
+    let x = note.x + g.x;
+    let high = along(slur).iter().filter(|p| p.0 >= x && p.0 <= x + g.head_w.unwrap()).map(|p| p.1).fold(f64::MAX, f64::min);
+    assert!(high > g.stem_end + 0.3, "the slur passes at {high}, the grace note's stem ends at {}", g.stem_end);
+    // After a note: where the drawing puts them, before the next note.
+    let eng = set(r"{ c''4( \afterGrace c''2 { e''16 f'' } c''4) }");
+    let slur = curves(&eng, CurveKind::Slur)[0];
+    let ns = notes(&eng);
+    let after = &ns[1].after_graces;
+    assert_eq!(after.len(), 2);
+    let tip = after.iter().map(|g| g.stem_end).fold(f64::MAX, f64::min);
+    let (left, right) = (ns[2].x - 3.0, ns[2].x - 0.5);
+    let low = along(slur).iter().filter(|p| p.0 >= left && p.0 <= right).map(|p| p.1).fold(f64::MIN, f64::max);
+    assert!(slur.up && low < tip - 0.3, "the slur passes at {low}, the grace notes' beam is at {tip}");
+}
+
+/// A slur goes over the number of a tuplet under it (score #1060), as
+/// LilyPond's does (`TupletNumber.avoid-slur` is `inside`): the 6 of a
+/// sextuplet beamed above was struck through by the slur over its run.
+#[test]
+fn a_slur_goes_over_the_number_of_a_tuplet_under_it() {
+    let eng = set(r"{ b''4 \tuplet 6/4 { a''16( gis'' fis'' e'' d'' cis'' } \tuplet 6/4 { b'16 a' gis' fis' e' dis' } e'4) }");
+    let slur = curves(&eng, CurveKind::Slur)[0];
+    assert!(slur.up);
+    let line = &eng.systems[0].lines[0];
+    assert_eq!(line.tuplets.len(), 2);
+    let over: Vec<_> = line.tuplets.iter().filter(|tp| tp.up).collect();
+    assert_eq!(over.len(), 1, "the second sextuplet's number is over its beam");
+    let number = eui_score::marks::tuplet_number_box(over[0]).unwrap();
+    assert!(gap(slur, number) >= 0.3, "the slur is {} from the 6", gap(slur, number));
+    let low = along(slur).iter().filter(|p| p.0 >= number[0] && p.0 <= number[2]).map(|p| p.1).fold(f64::MIN, f64::max);
+    assert!(low < number[1], "the slur passes at {low}, over the 6 whose top is at {}", number[1]);
+    // The number under the first sextuplet's beam is on the other side: nothing to go round.
+    let under = line.tuplets.iter().find(|tp| !tp.up).unwrap();
+    assert!(eui_score::marks::tuplet_number_box(under).unwrap()[1] > 4.0, "under the staff");
+    // A number is where it was without the slur.
+    let alone = set(r"{ b''4 \tuplet 6/4 { a''16 gis'' fis'' e'' d'' cis'' } \tuplet 6/4 { b'16 a' gis' fis' e' dis' } e'4 }");
+    let there = alone.systems[0].lines[0].tuplets.iter().find(|tp| tp.up).unwrap();
+    assert_eq!(eui_score::marks::tuplet_number_box(there).unwrap(), number);
+}
+
+/// A slur on the other side of the notes from a tuplet's number, or over
+/// other notes than the tuplet's, is the slur it was.
+#[test]
+fn a_tuplet_s_number_moves_only_the_slur_over_it() {
+    let arch = |src: &str| {
+        let eng = set(src);
+        let c = curves(&eng, CurveKind::Slur)[0];
+        ((c.points[1].1 - c.points[0].1).abs(), c.up)
+    };
+    // Stems down, the number under the beam, the slur over the heads.
+    let (with, up) = arch(r"{ \tuplet 3/2 { c''8( d'' e'' } f''4) }");
+    let (without, _) = arch(r"{ c''8( d'' e'' f''4) }");
+    assert!(up);
+    assert!((with - without).abs() < 0.3, "the arch over a triplet numbered below: {with} against {without}");
+}
+
+/// An acciaccatura's own slur ends before the stem of its note when the
+/// stem comes down (score #1060): it ran through it to the middle of the
+/// head. Up, the stem is out of its way and it ends under the head.
+#[test]
+fn a_grace_note_s_slur_stops_before_a_stem_that_comes_down() {
+    let eng = set(r"{ \acciaccatura a''8 g''4 \acciaccatura e'8 d'4 \grace e'8 d'4 }");
+    let ns = notes(&eng);
+    let (down, up) = (ns[0], ns[1]);
+    assert!(!down.up && up.up);
+    let (xa, ya, xb, yb, dir) = eui_score::marks::grace_slur(down).unwrap();
+    assert_eq!(dir, 1.0, "under the heads: the grace note's stem is up");
+    assert!(xb <= down.x - 0.25, "it ends at {xb}, before the stem at {}", down.x);
+    assert!(xb - xa >= 0.6, "and is a slur still: {} long", xb - xa);
+    let head = y_of(down.heads[0].pos);
+    assert!(yb > head && yb < head + 0.5, "beside the lower half of the head: {yb} against {head}");
+    assert!(ya > y_of(down.graces[0].heads[0].pos), "from under the grace note's head");
+    // A stem up is on the head's right: the slur ends under the middle of the head.
+    let (_, _, xb, yb, _) = eui_score::marks::grace_slur(up).unwrap();
+    assert!((xb - (up.x + up.head_w.unwrap() / 2.0)).abs() < 1e-6);
+    assert!((yb - (y_of(up.heads[0].pos) + 0.6)).abs() < 1e-6);
+    // `\grace` draws none.
+    assert!(eui_score::marks::grace_slur(ns[2]).is_none());
+}

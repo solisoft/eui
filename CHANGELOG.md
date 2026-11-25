@@ -444,6 +444,21 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Fixed
 
+- A score's slur goes over the grace notes it spans and over the number of
+  a tuplet under it, as LilyPond's goes round every note column and keeps a
+  `TupletNumber` inside it (score #1060): a phrase's slur was drawn through
+  an acciaccatura's head and stem, and through the 6 of a sextuplet beamed
+  on its side. An acciaccatura's own slur stops before the stem of its note
+  when that stem comes down, where it ran through it to the middle of the
+  head.
+- A score's tempo mark stays on its line (score #1060). A mark takes no
+  room in its bar, as LilyPond's takes none, so one over the last bar of a
+  line ran past the staff's end — into the margin on paper, off the picture
+  on a screen. The line breaks now leave a mark its room — its bar opens a
+  line, or bars follow it — and where no cut can (a `\break` after its bar,
+  a mark wider than its line) it starts farther left and ends at the line's
+  end. A score with a long mark may be cut into other lines than before; a
+  mark that fitted moves nothing.
 - Two marks written at one place — `\codaMark \mark "Trio"` — are one
   mark, the sign before the words, where they stood one over the other; over
   the bar line an ending's bracket stops at, a mark starts past the bracket

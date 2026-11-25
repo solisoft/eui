@@ -836,7 +836,12 @@ construct as LilyPond 2.25 draws it:
   height for its width says, or higher: just enough to pass half a space
   from the heads, the stems' ends, the accidentals and the articulations
   set next to the notes it goes round (`\staccato`, `\tenuto`,
-  `\accent`, `\marcato`, `\staccatissimo`, `\portato`) — its two
+  `\accent`, `\marcato`, `\staccatissimo`, `\portato`), from the grace
+  notes it spans — each one's head, and its stem's end with the flag
+  there when the stem is on the slur's side; the ones before the note it
+  starts on are before it — and from the number of a tuplet under it
+  that stands on its side, as LilyPond keeps a `TupletNumber` inside a
+  slur (score #1060) — its two
   control points raised each by what is in its way on its side, neither
   more than twice the other. The pair kept is the cheapest by LilyPond's
   terms: a space out of its place (`edge-attraction-factor`, a fifth of
@@ -845,9 +850,12 @@ construct as LilyPond 2.25 draws it:
   slope of 0.7, an end on a staff line, and an arch higher than its
   width's. Articulations other than those six, and fingerings, stand
   outside a slur that passes where they would be. A phrasing slur goes
-  round the slurs under it. Rests, grace notes and other voices under a
+  round the slurs under it. Rests and other voices under a
   slur are not gone round, and a slur between two staves is drawn as
-  before. `\shape #'((dx . dy) …) Slur` before the note a curve starts
+  before. The slur of an `\acciaccatura` or an `\appoggiatura` ends
+  under the middle of its note's head, or beside the head, 0.3 of a space
+  short of the note's stem, when that stem comes down where it would end
+  (score #1060). `\shape #'((dx . dy) …) Slur` before the note a curve starts
   on, or `-\shape #'(…) (` before the curve, moves the four control
   points of a slur, a phrasing slur or a tie by its offsets, in staff
   spaces, a positive dy up, from where they were put; a list of such
@@ -861,6 +869,18 @@ construct as LilyPond 2.25 draws it:
   from its middle where it is open (two thirds of a space unset) — each
   set with `\once \override`, or with `-\tweak` before `\<`, `\>`, `(`,
   `\(` or `~` (score #1020).
+- *A tempo mark on its line* (score #1060): a tempo mark takes no room
+  in its bar, as LilyPond's takes none
+  (`MetronomeMark.extra-spacing-width`), and MUST NOT run past the end of
+  the lines — the right of the music, where a filled line ends. The line
+  breaks leave it its room: a line whose mark would run past its end is
+  dearer by 6 for each space it would, beside what its stretch costs, so
+  the mark's bar opens a line or is followed by enough of it; a mark that
+  fits moves no line. Where no cut can — a `\break` after its bar, a mark
+  wider than its line — the mark starts farther left, never before its
+  line's start, and ends where the lines end. A score of one line that is
+  not filled keeps its mark where it is written, past the staff's end
+  when it is the longer of the two.
 - *Signs an engraver is expected to know* (score #1026):
   the ornaments `\reverseturn`, `\prallprall`, `\prallmordent`,
   `\upprall`, `\lineprall`, the fermatas `\veryshortfermata`,

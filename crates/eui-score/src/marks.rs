@@ -4,11 +4,11 @@
 //! slurs" and "Expression").
 
 pub use crate::cross::CurveKind;
-use crate::draw::{dot_start, past_flag, tremolo_reach};
-use crate::engrave::{barline_width, rest_name, stem_x, y_of, Line};
+use crate::draw::{after_shift, digit_height, dot_start, next_left, past_flag, tremolo_reach};
+use crate::engrave::{barline_width, flag_name, flags, rest_name, stem_x, y_of, Line, GRACE_K};
 use crate::glyphs::{glyph, Weight};
 use crate::measure::Bar;
-use crate::parse::{Ev, Kind, Run, StaffKind, Tempo, Words};
+use crate::parse::{Ev, GraceKind, Kind, Run, StaffKind, Tempo, Words};
 use crate::text::{args_of, em, text_box, text_width};
 use crate::RULE;
 
@@ -769,6 +769,69 @@ fn slur_avoids(ev: &Ev, over: bool, last: bool, out: &mut Vec<(f64, f64, f64)>) 
     }
 }
 
+/// What a slur clears of grace notes it goes over (score #1060) — `graces`,
+/// each at its x from `x` — as LilyPond's slur goes round every note column
+/// it spans, the small ones too: each one's head, and its stem's end with
+/// the flag there when the stem is on the slur's side. A phrase's slur was
+/// drawn through an acciaccatura's head and stem.
+fn slur_avoids_graces(graces: &[Ev], x: f64, over: bool, out: &mut Vec<(f64, f64, f64)>) {
+    let k = GRACE_K;
+    for g in graces {
+        let gx = x + g.x;
+        let hw = g.head_w.unwrap_or(0.0);
+        let half = glyph("noteheadBlack").bbox[3] * k;
+        let y = if over { y_of(g.heads.last().map_or(0, |h| h.pos)) - half } else { y_of(g.heads.first().map_or(0, |h| h.pos)) + half };
+        out.extend(slur_box([gx, y, gx + hw, y], over, SLUR_CLEAR));
+        if g.base > 1 && g.up == over {
+            // Where `draw_grace_group` draws the stem, and the flag to its right.
+            let sx = if g.up { gx + hw - RULE.stem * k } else { gx };
+            let flag = if g.beam.is_none() && flags(g.base) > 0 { glyph(&flag_name(g.base, g.up)).bbox[2] * k } else { RULE.stem * k };
+            out.extend(slur_box([sx, g.stem_end, sx + flag, g.stem_end], over, SLUR_CLEAR));
+        }
+    }
+}
+
+/// The slur of an acciaccatura or an appoggiatura, from its first grace
+/// note to the note it goes to: `(x, y)` of its start and of its end, and
+/// the side it arches to — 1 under the heads, when the grace stems are up,
+/// -1 over them. None for grace notes that have none (`\grace`).
+///
+/// It ends under the middle of the note's head — or beside the head, 0.3
+/// short of the note's stem when that comes down where the slur would end,
+/// as LilyPond ends a slur before a stem on its side: it ran through the
+/// stem to the middle of the head (score #1060).
+pub fn grace_slur(ev: &Ev) -> Option<(f64, f64, f64, f64, f64)> {
+    let first = ev.graces.first()?;
+    if !matches!(first.grace, Some(GraceKind::Acciaccatura | GraceKind::Appoggiatura)) || ev.heads.is_empty() {
+        return None;
+    }
+    // Under the heads when the grace stems are up, over them when down.
+    let below = first.up;
+    let dir = if below { 1.0 } else { -1.0 };
+    let gx = ev.x + first.x + first.head_w.unwrap_or(0.0) / 2.0;
+    let gy = if below { y_of(first.heads.first().map_or(0, |h| h.pos)) + 0.5 } else { y_of(first.heads.last().map_or(0, |h| h.pos)) - 0.5 };
+    let mut nx = ev.x + ev.head_w.unwrap_or(0.0) / 2.0;
+    let mut ny = if below { y_of(ev.heads.first().map_or(0, |h| h.pos)) + 0.6 } else { y_of(ev.heads.last().map_or(0, |h| h.pos)) - 0.6 };
+    if below && !ev.up && ev.base > 1 && !ev.look.omitted("Stem") {
+        nx = (stem_x(ev) - 0.3).max(gx + 0.6);
+        ny -= 0.3;
+    }
+    Some((gx, gy, nx, ny, dir))
+}
+
+/// A tuplet's number as it is drawn, `[left, top, right, bottom]`: centred
+/// on its bracket's middle. None when it has no number.
+pub fn tuplet_number_box(tp: &TupletPlace) -> Option<[f64; 4]> {
+    if tp.label.is_empty() {
+        return None;
+    }
+    let e = em(-2.0);
+    let (w, h) = (text_width(&tp.label, Weight::Italic, e), digit_height(e));
+    let xm = (tp.x0 + tp.x1) / 2.0;
+    let ym = tp.ya + (tp.yb - tp.ya) / (tp.x1 - tp.x0).max(0.01) * (xm - tp.x0);
+    Some([xm - w / 2.0, ym - h / 2.0, xm + w / 2.0, ym + h / 2.0])
+}
+
 /// What a slur clears of a box `[left, top, right, bottom]`: its edge on the
 /// slur's side by `clear`, and a little to each side of it — a slur that
 /// comes down steeply past a corner keeps off it too.
@@ -893,12 +956,39 @@ fn slur(lines: &mut [Line], bars: &[Bar], notes: &[At], ends: (At, At), kind: Cu
         tip.y += s * push;
     }
     let from = Source { kind, item: f.i, at: f.at, head: None, piece: 0 };
-    // What it goes round on a line: its own notes there, and for a
-    // phrasing slur the slurs under it.
+    // The numbers of the tuplets under it that stand on its side: it goes
+    // over them, as LilyPond's does (`TupletNumber.avoid-slur` is `inside`)
+    // — a sextuplet's 6 was struck through (score #1060).
+    let mut numbers: Vec<(usize, [f64; 4])> = Vec::new();
+    let tupled = ups.iter().any(|ev| ev.tuplet.is_some() || ev.tuplet_outer.is_some());
+    for sys in (f.sys..=l.sys).filter(|_| tupled) {
+        let Some(line) = lines.get(sys) else { continue };
+        for (items, tp) in tuplet_places(bars, line) {
+            let under = items.iter().any(|ev| ev.k == Kind::Note && voice_of(ev) == voice_of(f) && ev.n.is_some_and(|n| n >= fnum && n <= lnum));
+            if let Some(b) = tuplet_number_box(&tp).filter(|_| under && tp.up == over) {
+                numbers.push((sys, b));
+            }
+        }
+    }
+    // What it goes round on a line: its own notes there with their grace
+    // notes, the tuplets' numbers, and for a phrasing slur the slurs under
+    // it.
     let avoid_on = |sys: usize, drawn: &[Drawn]| -> Vec<(f64, f64, f64)> {
         let mut avoid: Vec<(f64, f64, f64)> = end_avoid.iter().filter(|a| a.0 == sys).map(|a| (a.1, a.2, a.3)).collect();
         for ev in ups.iter().filter(|ev| ev.sys == sys && ev.n != f.n) {
             slur_avoids(ev, over, ev.n == l.n, &mut avoid);
+            // The grace notes before a note stand under the slur that
+            // reaches it; the ones before its first note, before the slur.
+            slur_avoids_graces(&ev.graces, ev.x, over, &mut avoid);
+        }
+        // `\afterGrace`'s notes, where the drawing moves them: after every
+        // note but the slur's last.
+        for ev in ups.iter().filter(|ev| ev.sys == sys && ev.n != l.n && !ev.after_graces.is_empty()) {
+            let shift = bars.get(ev.bar).map_or(0.0, |bar| after_shift(ev, next_left(bar, ev)));
+            slur_avoids_graces(&ev.after_graces, ev.x + shift, over, &mut avoid);
+        }
+        for (_, b) in numbers.iter().filter(|n| n.0 == sys) {
+            avoid.extend(slur_box(*b, over, SLUR_CLEAR));
         }
         if kind == CurveKind::Phrase {
             for d in drawn.iter().filter(|d| d.sys == sys && d.voice == voice_of(f) && d.first <= lnum && d.last >= fnum) {
@@ -1084,8 +1174,9 @@ pub(crate) fn points(cmds: &[f64]) -> Vec<(f64, f64)> {
 
 // ---- Marks ------------------------------------------------------------------
 
-/// Everything around a staff's notes, line by line.
-pub(crate) fn marks(bars: &mut [Bar], lines: &mut [Line]) {
+/// Everything around a staff's notes, line by line; `edge` where the lines
+/// end, the right of the page's music.
+pub(crate) fn marks(bars: &mut [Bar], lines: &mut [Line], edge: f64) {
     hairpins(bars, lines);
     let brackets = sostenuto_spans(bars, lines);
     for (li, line) in lines.iter_mut().enumerate() {
@@ -1109,6 +1200,13 @@ pub(crate) fn marks(bars: &mut [Bar], lines: &mut [Line]) {
                     x = line.left + 0.8 + crate::engrave::clef_advance(bars[b].clef) + 1.0;
                 }
                 let w = mark_width(mark);
+                // Never past the lines' end (score #1060): where the cuts
+                // could not leave it its room, it starts farther left and
+                // ends there — over the end of the bar before, rather than
+                // in the margin or off the page.
+                if x + w > edge {
+                    x = (edge - w).max(line.left);
+                }
                 let mut low: f64 = -1.0;
                 for ob in range.clone() {
                     for other in &bars[ob].items {
@@ -1429,6 +1527,12 @@ fn together(marks: &[(i64, Words)]) -> Vec<(i64, i64, Vec<Run>)> {
 }
 
 fn tuplets(bars: &[Bar], line: &Line) -> Vec<TupletPlace> {
+    tuplet_places(bars, line).into_iter().map(|(_, tp)| tp).collect()
+}
+
+/// Each tuplet of a line: the notes and rests it holds, and where its number
+/// and its bracket go.
+fn tuplet_places<'a>(bars: &'a [Bar], line: &Line) -> Vec<(Vec<&'a Ev>, TupletPlace)> {
     // Each group: its id, its number, whether it holds another, its notes.
     let mut groups: Vec<(i64, i64, bool, Vec<&Ev>)> = Vec::new();
     for b in line.bars.clone() {
@@ -1443,19 +1547,19 @@ fn tuplets(bars: &[Bar], line: &Line) -> Vec<TupletPlace> {
         }
     }
     groups
-        .iter()
+        .into_iter()
         .map(|(_, n, outer, items)| {
             // `\tupletUp`, `\omit TupletNumber`, `\omit TupletBracket`.
             let look = &items[0].look;
             let forced = look.dir("TupletBracket").or_else(|| look.dir("TupletNumber")).map(|d| d > 0);
-            let mut tp = tuplet_place(bars, items, *n, *outer, forced);
+            let mut tp = tuplet_place(bars, &items, n, outer, forced);
             if look.omitted("TupletNumber") {
                 tp.label = String::new();
             }
             if look.omitted("TupletBracket") {
                 tp.bracket = false;
             }
-            tp
+            (items, tp)
         })
         .collect()
 }
@@ -2462,7 +2566,8 @@ fn voltas(bars: &[Bar], line: &Line) -> Vec<Volta> {
     out
 }
 
-pub(crate) fn mark_width(mark: &Tempo) -> f64 {
+/// How wide a tempo mark is: its words, and its beat and count in brackets.
+pub fn mark_width(mark: &Tempo) -> f64 {
     let e = em(0.0);
     let mut w = if mark.text.is_empty() { 0.0 } else { text_width(&mark.text, Weight::Bold, e) };
     if mark.bpm > 0 {

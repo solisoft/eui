@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::OnceLock;
 
-use crate::breaking::{line_starts, Opts, Widths};
+use crate::breaking::{line_starts, Hang, Opts, Widths};
 use crate::glyphs::{glyph, Weight};
 use crate::marks::{self, curves, reach, DynEl, HairpinPiece, MarkPlace, OttavaPlace, ScriptPlace, SpanPlace, TempoMark, TextPlace, TupletPlace, Volta};
 use crate::measure::{measures, measures_keeping, Bar, Beam, Changes, Opening};
@@ -1818,7 +1818,38 @@ fn system_width(bars: &[Bar], k: f64) -> f64 {
     total
 }
 
-fn break_bars(bars: &mut [Bar], width: f64, indent: f64, rest: f64, opts: &Opts) -> Vec<Line> {
+/// The tempo mark over each bar of a score, when it has one: the tick of
+/// the note it stands over and how wide it is — the widest, when two staves
+/// say one.
+fn tempo_marks(staves: &[Vec<Bar>]) -> Vec<Option<(i64, f64)>> {
+    let count = staves.iter().map(Vec::len).max().unwrap_or(0);
+    (0..count)
+        .map(|b| {
+            staves
+                .iter()
+                .filter_map(|bars| bars.get(b))
+                .flat_map(|bar| bar.items.iter())
+                .filter_map(|ev| ev.tempo.as_ref().map(|t| (ev.start, marks::mark_width(t))))
+                .fold(None, |best: Option<(i64, f64)>, m| if best.is_none_or(|b| m.1 > b.1) { Some(m) } else { best })
+        })
+        .collect()
+}
+
+/// What the line breaker knows of a tempo mark `w` wide over the note at
+/// `tick` of a bar: the room the bar leaves it after that note.
+fn hang_of(bar: &Bar, tick: i64, w: f64) -> Option<Hang> {
+    let items = spacers(bar);
+    let idx = items.iter().position(|ev| ev.start == tick)?;
+    let after_w = gaps(bar, 1.0).iter().skip(idx + 1).fold(0.0, |acc, g| acc + g) + barline_width(bar.drawn());
+    let after_spring = items.iter().skip(idx).fold(0.0, |acc, ev| acc + ev.ideal);
+    // Where `marks::marks` starts the mark of a line's first note: after the clef.
+    let lead = (idx == 0).then(|| 0.8 + clef_advance(bar.clef) + 1.0);
+    Some(Hang { w, after_w, after_spring, lead })
+}
+
+/// The lines of `bars`; `tempos` the tempo mark over each
+/// ([`tempo_marks`]), which the cuts leave their room.
+fn break_bars(bars: &mut [Bar], width: f64, indent: f64, rest: f64, tempos: &[Option<(i64, f64)>], opts: &Opts) -> Vec<Line> {
     bars[0].first = true;
     if bars[0].open_bar {
         bars[0].open_repeat = Some(".|:".into());
@@ -1837,6 +1868,7 @@ fn break_bars(bars: &mut [Bar], width: f64, indent: f64, rest: f64, opts: &Opts)
         forced: bars.iter().map(|b| b.brk.is_some()).collect(),
         keep: bars.iter().map(|b| b.no_break).collect(),
         fresh: bars.iter().map(|b| b.fresh).collect(),
+        hang: bars.iter().enumerate().map(|(b, bar)| tempos.get(b).copied().flatten().and_then(|(tick, w)| hang_of(bar, tick, w))).collect(),
     };
     let cuts = line_starts(&widths, |i| if i == 0 || bars[i].fresh { width - indent } else { width - rest }, opts);
     break_lines(bars, width, indent, &cuts, rest, opts)
@@ -2730,7 +2762,8 @@ fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) ->
     columns(&mut bars, sh, kind, &parsed.staves[0].props.string_tunings);
     let mut left = layout.left.unwrap_or(0.0);
     let indent = layout.indent.unwrap_or(0.0);
-    let mut lines = break_bars(&mut bars, width, indent, opts.short_indent, opts);
+    let tempos = tempo_marks(std::slice::from_ref(&bars));
+    let mut lines = break_bars(&mut bars, width, indent, opts.short_indent, &tempos, opts);
     if layout.left.is_none() && lines.len() > 1 {
         let last_number = bars[bars.len() - 1].number;
         left = text_width(&last_number.to_string(), Weight::Regular, em(-2.0)) + 0.2;
@@ -2739,7 +2772,7 @@ fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) ->
             bar.bar_drawn = None;
             bar.open_repeat = None;
         }
-        lines = break_bars(&mut bars, width, indent, opts.short_indent, opts);
+        lines = break_bars(&mut bars, width, indent, opts.short_indent, &tempos, opts);
     }
     place(&mut bars, &mut lines, left, indent, opts.short_indent);
     let scale = crate::look::staff_scale(&parsed.staves[0].events);
@@ -2748,7 +2781,7 @@ fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) ->
         line.scale = scale;
     }
     curves(&mut bars, &mut lines);
-    marks::marks(&mut bars, &mut lines);
+    marks::marks(&mut bars, &mut lines, left + width);
     let head = header_lines(&parsed.header, width).lowered(opts.top_markup_drop());
     let mut systems: Vec<System> = lines.into_iter().map(|line| System { left: line.left, right: line.right, lines: vec![line], ..System::default() }).collect();
     let staves = vec![bars];
@@ -3001,7 +3034,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
     let left = layout.left.unwrap_or(0.0);
     let indent = layout.indent.unwrap_or(0.0).max(deco + name_w - left);
     let rest = deco.max(deco + short_w - left).max(opts.short_indent);
-    let mut lines = break_bars(&mut master, width, indent, rest, opts);
+    let mut lines = break_bars(&mut master, width, indent, rest, &tempo_marks(&all), opts);
     place(&mut master, &mut lines, left, indent, rest);
     let mut systems: Vec<System> = Vec::new();
     let n_lines = lines.len();
@@ -3056,7 +3089,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
     for (s, bars) in all.iter_mut().enumerate() {
         let mut staff_lines: Vec<Line> = systems.iter().map(|o| o.lines[s].clone()).collect();
         curves(bars, &mut staff_lines);
-        marks::marks(bars, &mut staff_lines);
+        marks::marks(bars, &mut staff_lines, left + width);
         for (o, l) in systems.iter_mut().zip(staff_lines) {
             o.lines[s] = l;
         }

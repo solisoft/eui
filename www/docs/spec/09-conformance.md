@@ -1243,7 +1243,16 @@ version 7) and a margin.
   (`a_fermata_and_a_fingering_stand_outside_the_slur`); a phrasing slur
   round the slur under it
   (`a_phrasing_slur_goes_round_the_slur_under_it`); the ties where they
-  were (`ties_are_left_as_they_were`). `\shape` moves the four control
+  were (`ties_are_left_as_they_were`). Over the grace notes it spans and
+  not the ones before it (`a_slur_goes_over_a_grace_note_under_it`),
+  under them in a second voice and round `\afterGrace`'s
+  (`a_slur_goes_under_grace_notes_and_round_the_ones_after_a_note`);
+  over the number of a tuplet on its side, which stays where it was
+  (`a_slur_goes_over_the_number_of_a_tuplet_under_it`), one on the other
+  side moving nothing (`a_tuplet_s_number_moves_only_the_slur_over_it`);
+  an acciaccatura's own slur short of a stem that comes down
+  (`a_grace_note_s_slur_stops_before_a_stem_that_comes_down`; score
+  #1060). `\shape` moves the four control
   points by its offsets, before the note or before the curve, for the
   next note alone (`shape_moves_the_four_control_points`), a phrasing
   slur's and a tie's, and each piece of a broken curve
@@ -1257,6 +1266,17 @@ version 7) and a margin.
   (`a_curve_says_the_note_it_starts_on`), a hairpin, a dynamic, an
   articulation, a fingering and a word their note and their box
   (`marks_say_their_box_and_the_note_they_are_written_on`).
+- **A tempo mark stays on its line** (03 §1.4; score #1060), in
+  `crates/eui-score/tests/tempo_marks.rs`: at every width the lines are
+  cut so a long mark ends on its line and stands over its note, or after
+  the clef of the line its bar opens
+  (`the_line_breaks_leave_a_tempo_mark_its_room`), a piano's two staves
+  as one (`a_piano_s_lines_leave_the_mark_its_room_too`), on paper
+  wherever the mark is written (`a_page_s_lines_leave_the_mark_its_room`);
+  a mark that fits moves no line (`a_mark_that_fits_moves_no_line`); one
+  a `\break` leaves at its line's end starts farther left and ends where
+  the line ends (`a_mark_no_cut_can_fit_ends_at_the_line_s_end`); a short
+  line's keeps its place (`a_mark_longer_than_a_short_line_keeps_its_place`).
 - **A tablature's frets are drawn as LilyPond draws them** (03 §1.4;
   score #1026), in `crates/eui-score/tests/tablature.rs`: a grace note's
   small, before its note's, which makes room for them
