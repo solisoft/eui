@@ -1,0 +1,99 @@
+name: Audit
+
+# `cargo audit` against the RustSec advisory database, every day.
+#
+# An advisory is published against a dependency without anything in this
+# repository changing, so nothing else here would notice it: no diff, a green
+# suite. The database is fetched fresh on every run, so a daily run is what
+# turns "published" into "noticed".
+#
+# Every tracked Cargo.lock is audited, from the repository root, so a
+# `.cargo/audit.toml` there (waivers, each with its reason) applies to all of
+# them, exactly as `cargo audit` does locally. `--deny warnings` fails on
+# unmaintained and unsound crates too, not only on vulnerabilities: waive one
+# in `.cargo/audit.toml` with the reason and what removes it, never by
+# dropping the flag.
+#
+# A scheduled run that fails opens an issue (or comments on the open one), so
+# the finding does not live only in an email.
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.lock"
+      - ".cargo/audit.toml"
+      - ".github/workflows/audit.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # Every lockfile, each to its own report; the job fails at the end if
+      # any of them did, so one red lockfile does not hide the others.
+      - name: Audit every lockfile
+        id: audit
+        run: |
+          status=0
+          : > report.md
+          for lock in $(git ls-files '*Cargo.lock' | sort); do
+            echo "::group::$lock"
+            if cargo audit --deny warnings --file "$lock" > out.txt 2>&1; then
+              echo "ok: $lock"
+            else
+              status=1
+              echo "::error title=cargo audit::$lock has advisories"
+              {
+                echo "### \`$lock\`"
+                echo
+                echo '```'
+                grep -E '^(Crate|Version|Title|Date|ID|URL|Solution|Warning):|^Dependency tree' out.txt || tail -40 out.txt
+                echo '```'
+                echo
+              } >> report.md
+            fi
+            cat out.txt
+            echo "::endgroup::"
+          done
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: Open or update the audit issue
+        if: failure() && github.event_name == 'schedule' && steps.audit.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="cargo audit: advisories in the dependency tree"
+          {
+            echo "The daily audit failed on $(date -u +%Y-%m-%d) ([run]($RUN_URL))."
+            echo
+            cat report.md
+            echo "Fix by bumping the dependency (\`cargo update -p <crate>\`). Waive in"
+            echo "\`.cargo/audit.toml\` only with the reason and the condition that removes it."
+          } > body.md
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md
+          fi
